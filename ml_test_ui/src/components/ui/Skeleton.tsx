@@ -1,5 +1,5 @@
 /** Skeleton loaders for all async content */
-import { CSSProperties } from 'react'
+import { type CSSProperties } from 'react'
 
 interface SkeletonProps {
   width?: string | number

@@ -3,7 +3,7 @@
  * readability score, copy button, and A/B variant tabs.
  */
 import { useState } from 'react'
-import { Copy, Check, RotateCcw } from 'lucide-react'
+import { Copy, Check } from 'lucide-react'
 import { charCount, readabilityGrade } from '../../lib/formatters'
 import { PLATFORM_LIMITS } from '../../lib/constants'
 

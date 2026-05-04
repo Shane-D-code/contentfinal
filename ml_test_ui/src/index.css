@@ -38,7 +38,8 @@
 }
 
 /* Light mode */
-[data-theme="light"] {
+[data-theme="light"],
+html:not(.dark) {
   --bg:  #f8f7ff;
   --s1:  #ffffff;
   --s2:  #f1f0ff;
@@ -49,6 +50,7 @@
   --t1:  #1a1730;
   --t2:  #4a4570;
   --t3:  #8a85b0;
+  --shadow-card: 0 4px 24px rgba(0,0,0,.08);
 }
 
 html { scroll-behavior: smooth; }
@@ -60,12 +62,14 @@ body {
   line-height: 1.6;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   transition: background .3s, color .3s;
 }
 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--b1); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--b2); }
 
 button, input, textarea, select { font-family: inherit; }
 
@@ -81,26 +85,29 @@ button, input, textarea, select { font-family: inherit; }
   position: absolute; top: -40px; left: 8px; z-index: 9999;
   background: var(--accent); color: #fff; padding: 8px 16px;
   border-radius: var(--rs); font-weight: 600; font-size: 13px;
+  text-decoration: none;
   transition: top .2s;
 }
 .skip-link:focus { top: 8px; }
 
-/* Animations */
-@keyframes spin    { to { transform: rotate(360deg); } }
-@keyframes fadeUp  { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
-@keyframes fadeIn  { from { opacity:0; } to { opacity:1; } }
-@keyframes slideRight { from { opacity:0; transform:translateX(-16px); } to { opacity:1; transform:translateX(0); } }
-@keyframes shimmer { 0% { background-position:-400px 0; } 100% { background-position:400px 0; } }
-@keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:.45} }
-@keyframes glow    { 0%,100%{box-shadow:0 0 16px rgba(124,106,255,.2)} 50%{box-shadow:0 0 36px rgba(124,106,255,.5)} }
+/* ── Animations ─────────────────────────────────────────────────────────────── */
+@keyframes spin        { to { transform: rotate(360deg); } }
+@keyframes fadeUp      { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fadeIn      { from { opacity:0; } to { opacity:1; } }
+@keyframes slideRight  { from { opacity:0; transform:translateX(-16px); } to { opacity:1; transform:translateX(0); } }
+@keyframes shimmer     { 0% { background-position:-400px 0; } 100% { background-position:400px 0; } }
+@keyframes pulse       { 0%,100%{opacity:1} 50%{opacity:.45} }
+@keyframes glow        { 0%,100%{box-shadow:0 0 16px rgba(124,106,255,.2)} 50%{box-shadow:0 0 36px rgba(124,106,255,.5)} }
 @keyframes borderPulse { 0%,100%{border-color:var(--b1)} 50%{border-color:var(--accent)} }
-@keyframes countUp { from { opacity:0; transform:scale(.8); } to { opacity:1; transform:scale(1); } }
+@keyframes countUp     { from { opacity:0; transform:scale(.8); } to { opacity:1; transform:scale(1); } }
+@keyframes float       { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
 
-.fade-up    { animation: fadeUp    .35s ease forwards; }
-.fade-in    { animation: fadeIn    .25s ease forwards; }
-.slide-right{ animation: slideRight .3s ease forwards; }
+.fade-up     { animation: fadeUp     .35s ease forwards; }
+.fade-in     { animation: fadeIn     .25s ease forwards; }
+.slide-right { animation: slideRight .3s  ease forwards; }
+.counter-anim{ animation: countUp    .5s  ease forwards; }
 
-/* Skeleton */
+/* ── Skeleton ───────────────────────────────────────────────────────────────── */
 .skeleton {
   background: linear-gradient(90deg, var(--s2) 25%, var(--s3) 50%, var(--s2) 75%);
   background-size: 400px 100%;
@@ -108,7 +115,7 @@ button, input, textarea, select { font-family: inherit; }
   border-radius: var(--rs);
 }
 
-/* Gradient text */
+/* ── Gradient text ──────────────────────────────────────────────────────────── */
 .grad {
   background: var(--grad-hero);
   -webkit-background-clip: text;
@@ -116,41 +123,46 @@ button, input, textarea, select { font-family: inherit; }
   background-clip: text;
 }
 
-/* Glass */
+/* ── Glass ──────────────────────────────────────────────────────────────────── */
 .glass {
   background: rgba(15,15,26,.85);
   backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--b1);
 }
 
-/* Grid helpers */
+/* ── Grid helpers ───────────────────────────────────────────────────────────── */
 .grid-2    { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3    { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
 .grid-4    { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
 .grid-auto { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 16px; }
 
-/* Hover lift */
+/* ── Hover lift ─────────────────────────────────────────────────────────────── */
 .hover-lift { transition: transform .15s ease, box-shadow .15s ease; }
 .hover-lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-card); }
+
+/* ── Mobile nav ─────────────────────────────────────────────────────────────── */
+.mobile-nav { display: none; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .grid-4 { grid-template-columns: repeat(2,1fr); }
 }
+
 @media (max-width: 900px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .grid-4 { grid-template-columns: repeat(2,1fr); }
 }
+
 @media (max-width: 768px) {
   .grid-4 { grid-template-columns: 1fr 1fr; }
   .grid-auto { grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); }
   /* Bottom nav padding */
-  main { padding-bottom: 72px !important; }
-  /* Hide desktop tabs on mobile */
-  .desktop-tabs { display: none !important; }
+  main { padding-bottom: 80px !important; }
   /* Show mobile bottom nav */
   .mobile-nav { display: flex !important; }
 }
+
 @media (max-width: 480px) {
   .grid-4, .grid-auto { grid-template-columns: 1fr; }
   body { font-size: 13px; }
@@ -165,4 +177,11 @@ button, input, textarea, select { font-family: inherit; }
 @media print {
   nav, .no-print { display: none !important; }
   body { background: #fff; color: #000; }
+}
+
+/* ── Sonner toast overrides ─────────────────────────────────────────────────── */
+[data-sonner-toaster] {
+  --normal-bg: var(--s2) !important;
+  --normal-border: var(--b1) !important;
+  --normal-text: var(--t1) !important;
 }

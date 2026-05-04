@@ -1,70 +1,98 @@
-import React from 'react'
-import { Home, BarChart3, Settings } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { Home, BarChart3, FileText } from 'lucide-react'
+import type { View } from '../../App'
 
 interface Props {
-  view: 'studio' | 'results' | 'analytics'
-  onViewChange: (view: 'studio' | 'results' | 'analytics') => void
+  view: View
+  onViewChange: (view: View) => void
+  hasResults?: boolean
 }
 
-export default function BottomNav({ view, onViewChange }: Props) {
-  const NavItem = ({ icon: Icon, label, active, onClick }: { icon: React.ComponentType<{ size?: number }>, label: string, active: boolean, onClick: () => void }) => (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        padding: '8px 16px',
-        transition: 'all 0.2s ease',
-        transform: active ? 'scale(1.05)' : 'scale(1)',
-        color: active ? 'var(--accent)' : 'var(--t3)',
-        minHeight: '60px',
-        fontSize: '12px',
-        fontWeight: active ? '600' : '400',
-      }}
-    >
-      <Icon size={20} />
-      <span style={{ marginTop: 4, fontSize: 12 }}>{label}</span>
-    </button>
-  )
+const NAV_ITEMS = [
+  { id: 'studio'    as const, label: 'Studio',    icon: Home },
+  { id: 'results'   as const, label: 'Results',   icon: FileText },
+  { id: 'analytics' as const, label: 'Analytics', icon: BarChart3 },
+]
 
+export default function BottomNav({ view, onViewChange, hasResults = false }: Props) {
   return (
-    <div 
-      style={{ 
+    <nav
+      role="navigation"
+      aria-label="Mobile navigation"
+      className="mobile-nav"
+      style={{
         position: 'fixed',
         bottom: 0,
         left: 0,
         right: 0,
-        background: 'rgba(22,22,42,0.95)',
-        backdropFilter: 'blur(16px)',
+        background: 'rgba(15,15,26,.96)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
         borderTop: '1px solid var(--b1)',
-        zIndex: 50,
-        paddingBottom: '20px',
-        WebkitBackdropFilter: 'blur(16px)'
+        zIndex: 100,
+        paddingBottom: 'env(safe-area-inset-bottom, 8px)',
       }}
     >
-      <div style={{ maxWidth: 400, margin: '0 auto', padding: '0 16px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-around' }}>
-        <NavItem 
-          icon={Home} 
-          label="Studio" 
-          active={view === 'studio'}
-          onClick={() => onViewChange('studio')}
-        />
-        <NavItem 
-          icon={BarChart3} 
-          label="Results" 
-          active={view === 'results'}
-          onClick={() => onViewChange('results')}
-        />
-        <NavItem 
-          icon={Settings} 
-          label="Analytics" 
-          active={view === 'analytics'}
-          onClick={() => onViewChange('analytics')}
-        />
+      <div style={{ display: 'flex', alignItems: 'stretch', height: 56 }}>
+        {NAV_ITEMS.map(item => {
+          const isActive   = view === item.id
+          const isDisabled = item.id === 'results' && !hasResults
+          const Icon = item.icon
+
+          return (
+            <button
+              key={item.id}
+              onClick={() => !isDisabled && onViewChange(item.id)}
+              disabled={isDisabled}
+              aria-label={item.label}
+              aria-current={isActive ? 'page' : undefined}
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 3,
+                background: 'none',
+                border: 'none',
+                cursor: isDisabled ? 'not-allowed' : 'pointer',
+                color: isDisabled ? 'var(--t3)' : isActive ? 'var(--accent)' : 'var(--t2)',
+                fontSize: 11,
+                fontWeight: isActive ? 600 : 400,
+                position: 'relative',
+                transition: 'color .15s',
+                opacity: isDisabled ? 0.4 : 1,
+                minHeight: 44,
+              }}
+            >
+              {/* Active indicator */}
+              {isActive && (
+                <motion.div
+                  layoutId="nav-indicator"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: '20%',
+                    right: '20%',
+                    height: 2,
+                    background: 'var(--accent)',
+                    borderRadius: '0 0 2px 2px',
+                  }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                />
+              )}
+
+              <motion.div
+                animate={{ scale: isActive ? 1.1 : 1 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+              >
+                <Icon size={20} />
+              </motion.div>
+              <span>{item.label}</span>
+            </button>
+          )
+        })}
       </div>
-    </div>
+    </nav>
   )
 }
-

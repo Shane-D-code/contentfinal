@@ -1,25 +1,31 @@
 """
 FastAPI backend — Content & Design Engine
 All configuration read from .env via config.py
+
+Async job processing:
+  - Redis available → Celery (persistent, distributed, retryable)
+  - Redis unavailable → APScheduler in-process (dev/demo fallback)
+
+Both backends expose the same /api/jobs/{id}/status and /api/jobs/{id}/result
+endpoints, so the frontend doesn't need to know which backend is active.
 """
 
 import uuid
 import shutil
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 import asyncio
 import uvicorn
 
 from config import settings
 from api.logger import get_logger, request_id_var, setup_logging
 
-# Initialise structured logging immediately (before any logger.* calls)
+# Initialise structured logging before any logger.* calls
 setup_logging(
     log_level=settings.log_level,
     json_output=(settings.log_level.upper() != "DEBUG"),
@@ -29,25 +35,29 @@ logger = get_logger(__name__)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Content & Design Engine", version="2.0.0")
+app = FastAPI(
+    title="Content & Design Engine",
+    version="2.0.0",
+    description="AI-powered social media content generator from event photos/videos",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,   # Item 23: from .env, not hardcoded
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Scheduled cleanup (Item 3) — runs daily without Docker/cron ──────────────
+# ── Startup ───────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
-async def start_scheduler():
+async def startup():
     """
     On startup:
-    1. Configure APScheduler daily cleanup (no cron/Docker needed)
-    2. Log which job backend is active (Celery or in-memory)
+    1. Schedule daily cleanup via APScheduler (no cron/Docker needed)
+    2. Log which job backend is active
     """
-    # ── Daily cleanup via APScheduler ─────────────────────────────────────────
+    # Daily cleanup at 03:00 UTC
     try:
         from api.scheduler import get_scheduler
         from cleanup import run_cleanup
@@ -63,19 +73,22 @@ async def start_scheduler():
             id="daily_cleanup",
             replace_existing=True,
         )
-        logger.info("cleanup_scheduler_started", schedule="daily at 03:00")
+        logger.info("cleanup_scheduler_started", schedule="daily at 03:00 UTC")
     except Exception as e:
         logger.warning("cleanup_scheduler_failed", error=str(e))
 
-    # ── Log job backend ────────────────────────────────────────────────────────
+    # Log active job backend
     try:
         import redis as redis_lib
         r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
         r.ping()
         logger.info("job_backend", backend="celery+redis", url=settings.redis_url)
     except Exception:
-        logger.info("job_backend", backend="apscheduler_in_memory",
-                    note="Redis unavailable — async jobs run in-process")
+        logger.info(
+            "job_backend",
+            backend="apscheduler_in_memory",
+            note="Redis unavailable — async jobs run in-process (dev mode)",
+        )
 
 # ── Request ID + timing middleware ────────────────────────────────────────────
 
@@ -92,20 +105,19 @@ async def request_middleware(request: Request, call_next):
 
 # ── Static files ──────────────────────────────────────────────────────────────
 
-app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
-
-# Also serve generated output files
 import os
 os.makedirs(str(settings.output_dir), exist_ok=True)
-app.mount("/output", StaticFiles(directory=str(settings.output_dir)), name="output")
+
+app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
+app.mount("/output",  StaticFiles(directory=str(settings.output_dir)), name="output")
 
 # ── Lazy model singletons ─────────────────────────────────────────────────────
 
-_quality_assessor = None
-_face_detector = None
+_quality_assessor    = None
+_face_detector       = None
 _content_understander = None
-_video_processor = None
-_engine = None
+_video_processor     = None
+_engine              = None
 
 
 def get_quality_assessor():
@@ -140,23 +152,14 @@ def get_video_processor():
     return _video_processor
 
 
-def get_engine(event_description: str = "Event"):
-    global _engine
-    if _engine is None:
-        from content_engine import ContentEngine
-        _engine = ContentEngine(event_description=event_description)
-    return _engine
-
-
-# ── Item 2: File validation ───────────────────────────────────────────────────
+# ── File validation ───────────────────────────────────────────────────────────
 
 async def validate_upload(file: UploadFile) -> Path:
     """
-    Validate MIME type (via python-magic, not just Content-Type header)
-    and file size, then save to uploads/.
-    Raises HTTP 400 for invalid files, 413 for oversized files.
+    Validate MIME type (via python-magic, not spoofable Content-Type header)
+    and file size, then save to uploads/ with a UUID filename.
+    Raises HTTP 413 for oversized files, HTTP 400 for invalid MIME types.
     """
-    # Read entire file into memory for size + magic inspection
     data = await file.read()
 
     # Size check
@@ -169,12 +172,11 @@ async def validate_upload(file: UploadFile) -> Path:
             ),
         )
 
-    # Real MIME type from file bytes (not spoofable via Content-Type header)
+    # Real MIME type from file bytes
     try:
         import magic as libmagic
         detected_mime = libmagic.from_buffer(data[:2048], mime=True)
     except Exception:
-        # python-magic unavailable — fall back to Content-Type header
         detected_mime = file.content_type or "application/octet-stream"
 
     if detected_mime not in settings.allowed_mime_types:
@@ -186,8 +188,7 @@ async def validate_upload(file: UploadFile) -> Path:
             ),
         )
 
-    # Save to disk
-    ext = Path(file.filename or "upload").suffix.lower() or ".bin"
+    ext  = Path(file.filename or "upload").suffix.lower() or ".bin"
     dest = settings.upload_dir / f"{uuid.uuid4().hex}{ext}"
     dest.write_bytes(data)
 
@@ -202,25 +203,36 @@ async def validate_upload(file: UploadFile) -> Path:
 
 
 async def validate_uploads(files: List[UploadFile]) -> List[Path]:
-    """Validate and save a list of uploads."""
-    paths = []
-    for f in files:
-        paths.append(await validate_upload(f))
-    return paths
+    return [await validate_upload(f) for f in files]
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Health & status ───────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "2.0.0"}
+    """Health check — also reports Redis/Celery availability."""
+    redis_ok = False
+    try:
+        import redis as redis_lib
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
+        redis_ok = True
+    except Exception:
+        pass
+
+    return {
+        "status":  "ok",
+        "version": "2.0.0",
+        "redis":   redis_ok,
+        "backend": "celery" if redis_ok else "apscheduler",
+    }
 
 
 @app.get("/api/model-status")
 def model_status():
+    """Check which ML packages are installed."""
     status = {}
     for pkg in ["torch", "transformers", "ultralytics", "sentence_transformers",
-                "cv2", "librosa", "scenedetect", "celery", "redis"]:
+                "cv2", "librosa", "scenedetect", "celery", "redis", "flower"]:
         try:
             __import__(pkg)
             status[pkg] = "available"
@@ -229,7 +241,7 @@ def model_status():
     return status
 
 
-# ── Model 1: Quality ──────────────────────────────────────────────────────────
+# ── Individual ML model endpoints ─────────────────────────────────────────────
 
 @app.post("/api/quality")
 async def assess_quality(file: UploadFile = File(...)):
@@ -242,28 +254,26 @@ async def assess_quality(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Model 2: Faces ────────────────────────────────────────────────────────────
-
 @app.post("/api/faces")
 async def detect_faces(file: UploadFile = File(...)):
-    """
-    Returns face count, per-face confidences, AND bounding boxes
-    so the frontend can draw overlays. (Item 5)
-    """
+    """Returns face count, per-face confidences, and normalised bounding boxes."""
     path = await validate_upload(file)
     try:
         detector = get_face_detector()
-        results = detector.model.predict(str(path), conf=settings.face_confidence_threshold, verbose=False)
+        results  = detector.model.predict(
+            str(path), conf=settings.face_confidence_threshold, verbose=False
+        )
 
-        face_count = 0
+        face_count  = 0
         confidences = []
-        bboxes = []
+        bboxes      = []
+        w = h = 0
 
         if results and results[0].boxes is not None:
-            boxes = results[0].boxes
+            boxes      = results[0].boxes
             face_count = len(boxes)
             confidences = [round(c, 3) for c in boxes.conf.cpu().tolist()]
-            # Return normalised bboxes [x1,y1,x2,y2] as fractions of image size
+
             from PIL import Image as PILImage
             img = PILImage.open(str(path))
             w, h = img.size
@@ -276,20 +286,18 @@ async def detect_faces(file: UploadFile = File(...)):
                 })
 
         return {
-            "filename": file.filename,
-            "file_url": f"/uploads/{path.name}",
-            "face_count": face_count,
-            "confidences": confidences,
-            "bboxes": bboxes,
-            "image_width": w if face_count >= 0 else 0,
-            "image_height": h if face_count >= 0 else 0,
+            "filename":     file.filename,
+            "file_url":     f"/uploads/{path.name}",
+            "face_count":   face_count,
+            "confidences":  confidences,
+            "bboxes":       bboxes,
+            "image_width":  w,
+            "image_height": h,
         }
     except Exception as e:
         logger.error(f"Face detection failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ── Model 3: Content ──────────────────────────────────────────────────────────
 
 @app.post("/api/content")
 async def understand_content(file: UploadFile = File(...)):
@@ -302,17 +310,15 @@ async def understand_content(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Model 4: Video highlights ─────────────────────────────────────────────────
-
 @app.post("/api/highlights")
 async def extract_highlights(file: UploadFile = File(...), target_duration: int = 45):
     path = await validate_upload(file)
     try:
         highlights = get_video_processor().extract_highlights(str(path), target_duration=target_duration)
         return {
-            "filename": file.filename,
-            "file_url": f"/uploads/{path.name}",
-            "highlights": highlights,
+            "filename":               file.filename,
+            "file_url":               f"/uploads/{path.name}",
+            "highlights":             highlights,
             "total_selected_seconds": round(sum(h["end"] - h["start"] for h in highlights), 2),
         }
     except Exception as e:
@@ -320,7 +326,7 @@ async def extract_highlights(file: UploadFile = File(...), target_duration: int 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Synchronous pipeline (kept for small batches / testing) ──────────────────
+# ── Synchronous pipeline (small batches / testing) ────────────────────────────
 
 @app.post("/api/pipeline")
 async def run_pipeline(
@@ -329,16 +335,16 @@ async def run_pipeline(
 ):
     paths = [str(p) for p in await validate_uploads(files)]
     try:
-        engine = get_engine(event_description)
+        from content_engine import ContentEngine
+        engine     = ContentEngine(event_description=event_description)
         selections = engine.select_assets(paths)
-        results = _serialise_selections(selections)
-        return {"event": event_description, "total": len(results), "selections": results}
+        return {"event": event_description, "total": len(selections), "selections": _serialise_selections(selections)}
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Item 1: Async pipeline via Celery ─────────────────────────────────────────
+# ── Async pipeline via Celery (with APScheduler fallback) ─────────────────────
 
 @app.post("/api/pipeline/async")
 async def run_pipeline_async(
@@ -346,7 +352,7 @@ async def run_pipeline_async(
     event_description: str = Form("Event"),
 ):
     """
-    Submit pipeline job. Returns job_id immediately.
+    Submit pipeline job. Returns job_id immediately (<500ms).
     Uses Celery if Redis is available, otherwise APScheduler in-process.
     Poll /api/jobs/{job_id}/status for progress.
     """
@@ -358,6 +364,7 @@ async def run_pipeline_async(
         redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
         from api.tasks import run_pipeline_task
         task = run_pipeline_task.delay(paths, event_description)
+        logger.info("job_submitted", backend="celery", job_id=task.id)
         return {"job_id": task.id, "status": "queued", "backend": "celery"}
     except Exception:
         pass
@@ -375,7 +382,7 @@ async def run_generate_async(
     event_description: str = Form("Event"),
 ):
     """
-    Submit full generation job. Returns job_id immediately.
+    Submit full generation job. Returns job_id immediately (<500ms).
     Uses Celery if Redis is available, otherwise APScheduler in-process.
     """
     paths = [str(p) for p in await validate_uploads(files)]
@@ -386,6 +393,7 @@ async def run_generate_async(
         redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
         from api.tasks import run_generate_task
         task = run_generate_task.delay(paths, event_name, event_description)
+        logger.info("job_submitted", backend="celery", job_id=task.id)
         return {"job_id": task.id, "status": "queued", "backend": "celery"}
     except Exception:
         pass
@@ -396,13 +404,15 @@ async def run_generate_async(
     return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
 
 
+# ── Job status & result ───────────────────────────────────────────────────────
+
 @app.get("/api/jobs/{job_id}/status")
 async def job_status(job_id: str):
     """
     Poll job status. Works for both Celery and APScheduler jobs.
-    Returns: {job_id, status, progress, backend, error?}
+    Returns: {job_id, status, progress: {step, pct}, backend, error?}
     """
-    # Try APScheduler in-memory store first (faster lookup)
+    # APScheduler in-memory store (checked first — faster)
     from api.scheduler import get_job
     job = get_job(job_id)
     if job:
@@ -414,12 +424,12 @@ async def job_status(job_id: str):
             "error":    job.get("error"),
         }
 
-    # Try Celery
+    # Celery result backend
     try:
         from celery.result import AsyncResult
         from api.worker import celery_app
         result = AsyncResult(job_id, app=celery_app)
-        info = result.info or {}
+        info   = result.info or {}
         return {
             "job_id":   job_id,
             "status":   result.state,
@@ -462,26 +472,37 @@ async def job_result(job_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# ── WebSocket — real-time job updates ─────────────────────────────────────────
+
 @app.websocket("/ws/jobs/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    """
+    Push job status updates over WebSocket every second.
+    Closes automatically when the job reaches a terminal state.
+    """
     await websocket.accept()
     try:
         while True:
-            # Reuse job_status logic
-            status_data = job_status(job_id)
-            # Add progress/step for frontend
-            if 'progress' in status_data:
-                status_data['progress'] = status_data['progress'].get('pct', 0) / 100
-                status_data['step'] = status_data['progress'].get('step', 'Unknown')
+            status_data = await job_status(job_id)
             await websocket.send_json(status_data)
+            if status_data.get("status") in ("completed", "SUCCESS", "failed", "FAILURE"):
+                break
             await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        pass
     except Exception as e:
-        await websocket.send_json({"error": str(e)})
+        try:
+            await websocket.send_json({"error": str(e)})
+        except Exception:
+            pass
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
-# ── Synchronous generate (kept for testing) ───────────────────────────────────
+# ── Synchronous generate (testing / small batches) ────────────────────────────
 
 @app.post("/api/generate")
 async def generate_content(
@@ -500,7 +521,7 @@ async def _sync_generate(paths, event_name, event_description):
         for p in paths:
             shutil.copy(p, tmp_dir / Path(p).name)
         from content_engine.orchestrator import ContentOrchestrator
-        orch = ContentOrchestrator(event_name=event_name, event_description=event_description)
+        orch    = ContentOrchestrator(event_name=event_name, event_description=event_description)
         out_dir = orch.run(str(tmp_dir), output_root=str(settings.output_dir))
         output_files = {f.name: str(f.resolve()) for f in sorted(out_dir.iterdir()) if f.is_file()}
         return {"event": event_name, "output_dir": str(out_dir.resolve()), "files": output_files}
@@ -518,22 +539,22 @@ def _serialise_selections(selections) -> list:
     for s in selections:
         file_name = Path(s.asset.path).name
         results.append({
-            "filename": file_name,
-            "file_url": f"/uploads/{file_name}",
-            "intended_use": s.intended_use,
-            "confidence": round(s.confidence, 4),
-            "low_confidence": s.confidence < 0.5,
+            "filename":         file_name,
+            "file_url":         f"/uploads/{file_name}",
+            "intended_use":     s.intended_use,
+            "confidence":       round(s.confidence, 4),
+            "low_confidence":   s.confidence < 0.5,
             "selection_reason": s.selection_reason,
             "scores": {
-                "quality": round(s.asset.quality_score, 4),
+                "quality":   round(s.asset.quality_score, 4),
                 "aesthetic": round(s.asset.aesthetic_score, 4),
-                "final": round(s.asset.final_score, 4),
+                "final":     round(s.asset.final_score, 4),
             },
-            "face_count": s.asset.face_count,
-            "bboxes": [],
-            "scene_concepts": s.asset.scene_concepts[:8],
-            "asset_type": s.asset.asset_type,
-            "duration": s.asset.duration,
+            "face_count":      s.asset.face_count,
+            "bboxes":          [],
+            "scene_concepts":  s.asset.scene_concepts[:8],
+            "asset_type":      s.asset.asset_type,
+            "duration":        s.asset.duration,
             "highlight_clips": s.asset.highlight_clips or [],
         })
     return results

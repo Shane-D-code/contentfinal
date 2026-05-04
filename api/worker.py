@@ -4,11 +4,18 @@ Celery worker — background job processing.
 Start with:
     celery -A api.worker worker --loglevel=info
 
-Monitor with Flower (optional):
-    celery -A api.worker flower
+Monitor with Flower:
+    celery -A api.worker flower --port=5555
+
+The worker is configured for ML workloads:
+  - concurrency=1 (one task at a time — ML models are memory-heavy)
+  - acks_late=True (re-queue on worker crash)
+  - prefetch_multiplier=1 (fair distribution)
+  - result_expires=86400 (results kept 24 h in Redis)
 """
 
 from celery import Celery
+from kombu import Exchange, Queue
 from config import settings
 
 celery_app = Celery(
@@ -18,16 +25,55 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    # Serialisation
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone="UTC",
-    enable_utc=True,
+
+    # Reliability
     task_track_started=True,
     task_acks_late=True,                  # Re-queue on worker crash
-    worker_prefetch_multiplier=1,         # One task at a time (ML is memory-heavy)
-    result_expires=86400,                 # Results expire after 24 hours
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,         # One task at a time
+
+    # Time limits
+    task_time_limit=settings.celery_task_time_limit,
+    task_soft_time_limit=settings.celery_task_soft_time_limit,
+
+    # Worker lifecycle
+    worker_concurrency=settings.celery_worker_concurrency,
+    worker_max_tasks_per_child=settings.celery_worker_max_tasks_per_child,
+
+    # Results
+    result_expires=86400,                 # 24 hours
+
+    # Timezone
+    timezone="UTC",
+    enable_utc=True,
+
+    # Queues — default queue for all tasks
+    task_default_queue="content_engine",
+    task_queues=(
+        Queue("content_engine", Exchange("content_engine"), routing_key="content_engine"),
+    ),
+
+    # Logging — don't hijack root logger
+    worker_hijack_root_logger=False,
+    worker_redirect_stdouts_level="WARNING",
 )
 
 # Auto-discover tasks in api/tasks.py
 celery_app.autodiscover_tasks(["api"])
+
+# Optional: Sentry integration
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            integrations=[CeleryIntegration()],
+            traces_sample_rate=0.1,
+        )
+    except ImportError:
+        pass

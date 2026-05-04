@@ -7,10 +7,9 @@ import { Copy, Check, ExternalLink } from 'lucide-react'
 interface Props {
   platform: 'linkedin' | 'instagram' | 'stories' | 'reel'
   caption: string
-  imageUrl?: string
 }
 
-export default function SocialShareButtons({ platform, caption, imageUrl }: Props) {
+export default function SocialShareButtons({ platform, caption }: Props) {
   const [copied, setCopied] = useState(false)
 
   const copyCaption = () => {

@@ -1,4 +1,4 @@
-/* Micro-interactions & page transitions */
+/* ── Micro-interactions & page transitions ──────────────────────────────────── */
 
 /* Page fade/slide */
 .page-enter {
@@ -34,11 +34,6 @@
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
-.skeleton {
-  background: linear-gradient(90deg, var(--s3) 25%, var(--s2) 50%, var(--s3) 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s infinite;
-}
 
 /* Button pulse */
 @keyframes button-pulse {
@@ -54,9 +49,6 @@
   0% { transform: scale(0.8); opacity: 0; }
   60% { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(1); }
-}
-.counter-anim {
-  animation: counter-bounce 0.6s ease-out;
 }
 
 /* Tab slide */
@@ -92,8 +84,40 @@
   animation: drag-glow 1s ease-out;
 }
 
+/* Gradient border animation */
+@keyframes gradient-border {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Shimmer for loading */
+@keyframes shimmer-move {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.shimmer-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent);
+  animation: shimmer-move 1.5s infinite;
+}
+
+/* Stagger children */
+.stagger-children > * {
+  animation: fadeUp 0.3s ease forwards;
+  opacity: 0;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger-children > *:nth-child(2) { animation-delay: 0.10s; }
+.stagger-children > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger-children > *:nth-child(4) { animation-delay: 0.20s; }
+.stagger-children > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger-children > *:nth-child(6) { animation-delay: 0.30s; }
+
 /* Print optimizations */
 @media print {
   @page { margin: 0.5in; }
+  .no-print { display: none !important; }
 }
-

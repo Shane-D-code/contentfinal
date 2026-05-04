@@ -3,15 +3,14 @@
  * (browser ZIP requires JSZip; we use sequential downloads as fallback).
  */
 import { useState } from 'react'
-import { Download, Package } from 'lucide-react'
+import { Package } from 'lucide-react'
 import { Spinner } from '../ui'
 
 interface Props {
   files: Record<string, string>  // filename → web URL
-  eventName: string
 }
 
-export default function BulkDownload({ files, eventName }: Props) {
+export default function BulkDownload({ files }: Props) {
   const [downloading, setDownloading] = useState(false)
   const [done, setDone] = useState(false)
 

@@ -5,18 +5,13 @@ import type { JobStatus } from '../api'
 /**
  * Polls /api/jobs/{jobId}/status every 2 seconds until terminal state.
  *
- * Root cause of ERR_INSUFFICIENT_RESOURCES fix:
- *   onDone/onFail are inline arrow functions — they get a new reference on
- *   every parent render, which caused poll → useEffect deps to change every
- *   render, restarting the interval hundreds of times per second.
- *
- * Fix: store callbacks in refs so they never appear in dependency arrays.
- *   The interval is started exactly once per jobId change.
+ * Callbacks are stored in refs to prevent dependency array churn
+ * (avoids ERR_INSUFFICIENT_RESOURCES from restarting interval on every render).
  */
 export function useJobPolling(
   jobId: string | null,
-  onDone?: (s: JobStatus) => void,
-  onFail?: (e: string) => void,
+  onDone?: ((s: JobStatus) => void) | null,
+  onFail?: ((e: string) => void) | null,
 ) {
   const [status, setStatus] = useState<JobStatus | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -59,7 +54,7 @@ export function useJobPolling(
           onFailRef.current?.(s.error ?? 'Job failed')
         }
       } catch {
-        // Network hiccup — keep polling, don't crash
+        // Network hiccup — keep polling
       }
     }
 
@@ -70,13 +65,12 @@ export function useJobPolling(
       cancelled = true
       stopPolling()
     }
-  }, [jobId, stopPolling]) // ← only jobId here, NOT poll/onDone/onFail
+  }, [jobId, stopPolling])
 
   const pct  = status?.progress?.pct  ?? _toPct(status?.status)
   const step = status?.progress?.step ?? _toStep(status?.status)
-  const polling = !!intervalRef.current
 
-  return { status, polling, pct, step }
+  return { status, polling: !!intervalRef.current, pct, step }
 }
 
 function _toPct(s?: string) {
@@ -87,8 +81,8 @@ function _toPct(s?: string) {
 }
 
 function _toStep(s?: string) {
-  if (s === 'completed' || s === 'SUCCESS') return 'Done'
-  if (s === 'running'   || s === 'STARTED') return 'Processing…'
-  if (s === 'failed'    || s === 'FAILURE') return 'Failed'
-  return 'Queued'
+  if (s === 'completed' || s === 'SUCCESS') return 'done'
+  if (s === 'running'   || s === 'STARTED') return 'processing_assets'
+  if (s === 'failed'    || s === 'FAILURE') return 'failed'
+  return 'queued'
 }

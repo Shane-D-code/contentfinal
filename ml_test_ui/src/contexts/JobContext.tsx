@@ -1,8 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
-import { toast } from 'react-hot-toast'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import type { JobStatus } from '../api'
 
-// Types (extend existing)
 interface JobState {
   jobId: string | null
   status: JobStatus | null
@@ -19,7 +17,6 @@ interface JobContextType {
   retryJob: () => void
 }
 
-// Default state
 const defaultJob: JobState = {
   jobId: null,
   status: null,
@@ -29,77 +26,81 @@ const defaultJob: JobState = {
   isConnected: false,
 }
 
-// Context
 const JobContext = createContext<JobContextType | undefined>(undefined)
 
-// Provider
 export function JobProvider({ children }: { children: ReactNode }) {
   const [job, setJob] = useState<JobState>(defaultJob)
-  const [ws, setWs] = useState<WebSocket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
-  // WS connect
   const connectJobWS = useCallback((jobId: string) => {
-    if (ws) ws.close()
-
-    const url = `ws://localhost:8000/ws/jobs/${jobId}`
-    const socket = new WebSocket(url)
-
-    socket.onopen = () => {
-      setJob(prev => ({ ...prev, isConnected: true, error: null }))
-      toast.success('Connected to job updates')
+    // Close existing connection
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
     }
 
-    socket.onmessage = (event) => {
-      const data: JobStatus & { progress?: number; step?: string } = JSON.parse(event.data)
-      setJob(prev => ({
-        ...prev,
-        status: data,
-        progress: data.progress || prev.progress,
-        step: data.step || prev.step,
-        error: data.error || null,
-      }))
+    // Use relative WS URL — works with Vite proxy
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = window.location.hostname
+    const port = import.meta.env.DEV ? '8000' : window.location.port
+    const url = `${protocol}//${host}:${port}/ws/jobs/${jobId}`
 
-      if (data.status === 'completed') {
-        toast.success('Job complete!')
-      } else if (data.status === 'failed') {
-        toast.error(`Job failed: ${data.error || 'Unknown error'}`)
+    try {
+      const socket = new WebSocket(url)
+
+      socket.onopen = () => {
+        setJob(prev => ({ ...prev, isConnected: true, error: null }))
       }
+
+      socket.onmessage = (event) => {
+        try {
+          const data: JobStatus & { progress?: number; step?: string } = JSON.parse(event.data)
+          setJob(prev => ({
+            ...prev,
+            status: data,
+            progress: typeof data.progress === 'number' ? data.progress : (data.progress as any)?.pct ?? prev.progress,
+            step: (data.progress as any)?.step ?? prev.step,
+            error: data.error ?? null,
+          }))
+        } catch {}
+      }
+
+      socket.onclose = () => {
+        setJob(prev => ({ ...prev, isConnected: false }))
+        wsRef.current = null
+      }
+
+      socket.onerror = () => {
+        setJob(prev => ({ ...prev, isConnected: false, error: 'WebSocket connection failed — using polling fallback' }))
+        wsRef.current = null
+      }
+
+      wsRef.current = socket
+    } catch {
+      // WebSocket not available — polling hook handles it
     }
+  }, [])
 
-    socket.onclose = () => {
-      setJob(prev => ({ ...prev, isConnected: false }))
-      toast('Job connection closed')
-    }
-
-    socket.onerror = (err) => {
-      console.error('WS error:', err)
-      setJob(prev => ({ ...prev, isConnected: false, error: 'Connection failed' }))
-      toast.error('Lost connection to job updates')
-    }
-
-    setWs(socket)
-  }, [ws])
-
-  const startJob = (jobId: string) => {
+  const startJob = useCallback((jobId: string) => {
     setJob({ jobId, status: null, progress: 0, step: '', error: null, isConnected: false })
     connectJobWS(jobId)
-  }
+  }, [connectJobWS])
 
-  const cancelJob = () => {
-    if (ws) {
-      ws.close()
-      setWs(null)
+  const cancelJob = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
     }
     setJob(defaultJob)
-  }
+  }, [])
 
-  const retryJob = () => {
+  const retryJob = useCallback(() => {
     if (job.jobId) startJob(job.jobId)
-  }
+  }, [job.jobId, startJob])
 
   useEffect(() => {
     return () => {
-      if (ws) ws.close()
+      if (wsRef.current) wsRef.current.close()
     }
   }, [])
 
@@ -110,10 +111,8 @@ export function JobProvider({ children }: { children: ReactNode }) {
   )
 }
 
-// Hook
 export function useJob() {
   const context = useContext(JobContext)
   if (!context) throw new Error('useJob must be used within JobProvider')
   return context
 }
-

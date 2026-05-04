@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, ChevronLeft, ChevronRight, Globe, ThumbsUp, Repeat2 } from 'lucide-react'
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, ChevronLeft, ChevronRight, Globe } from 'lucide-react'
 
 // All paths are relative — served through Vite proxy (/output, /uploads → :8000)
 const img = (p: string) => p ?? ''

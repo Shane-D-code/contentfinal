@@ -2,7 +2,7 @@
  * FileQueue — shows uploaded files with size, type icon, warnings, and remove button.
  * Detects duplicates and large files (>50MB).
  */
-import { X, Image, Film, AlertTriangle, CheckCircle } from 'lucide-react'
+import { X, Image, Film, AlertTriangle } from 'lucide-react'
 import { fmtBytes } from '../../lib/formatters'
 import { LARGE_FILE_WARNING_MB, MAX_FILE_SIZE_MB } from '../../lib/constants'
 
