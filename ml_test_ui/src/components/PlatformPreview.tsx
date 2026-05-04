@@ -1,0 +1,178 @@
+import { useState } from 'react'
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, ChevronLeft, ChevronRight, Globe, ThumbsUp, Repeat2 } from 'lucide-react'
+
+// All paths are relative — served through Vite proxy (/output, /uploads → :8000)
+const img = (p: string) => p ?? ''
+
+// ── LinkedIn ──────────────────────────────────────────────────────────────────
+export function LinkedInPreview({ images, caption, name }: { images:string[]; caption:string; name:string }) {
+  const g = images.slice(0,6)
+  const cols = g.length<=1?1:g.length<=2?2:g.length<=3?3:g.length<=4?2:3
+  const rows = Math.ceil(g.length/cols)
+
+  return (
+    <div style={{ background:'#fff', borderRadius:10, overflow:'hidden', fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', boxShadow:'0 2px 16px rgba(0,0,0,.18)', maxWidth:560 }}>
+      {/* Header */}
+      <div style={{ padding:'12px 16px', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:48, height:48, borderRadius:'50%', background:'linear-gradient(135deg,#7c6aff,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:20, flexShrink:0 }}>
+          {name[0]?.toUpperCase()}
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:600, fontSize:14, color:'#000' }}>{name}</div>
+          <div style={{ fontSize:12, color:'#666', display:'flex', alignItems:'center', gap:4 }}>
+            Just now · <Globe size={11} />
+          </div>
+        </div>
+        <MoreHorizontal size={20} color='#666' />
+      </div>
+
+      {/* Caption */}
+      <div style={{ padding:'0 16px 12px', fontSize:14, color:'#000', lineHeight:1.65, whiteSpace:'pre-wrap' }}>
+        {caption.slice(0,300)}{caption.length>300?'…':''}
+      </div>
+
+      {/* Image grid */}
+      {g.length>0 && (
+        <div style={{ display:'grid', gridTemplateColumns:`repeat(${cols},1fr)`, gridTemplateRows:`repeat(${rows},1fr)`, gap:2, height:Math.min(360, 180*rows) }}>
+          {g.map((src,i) => (
+            <div key={i} style={{ overflow:'hidden', position:'relative' }}>
+              <img src={img(src)} alt='' style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
+              {i===5 && images.length>6 && (
+                <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,.55)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:22, fontWeight:700 }}>+{images.length-6}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Reactions */}
+      <div style={{ padding:'8px 16px 4px', borderTop:'1px solid #e8e8e8', fontSize:12, color:'#666' }}>
+        👍 ❤️ 💡 <span style={{ marginLeft:4 }}>247 · 38 comments</span>
+      </div>
+      <div style={{ display:'flex', borderTop:'1px solid #e8e8e8' }}>
+        {[['👍','Like'],['💬','Comment'],['🔁','Repost'],['📤','Send']].map(([ic,lb])=>(
+          <button key={lb} style={{ flex:1, padding:'10px 4px', background:'none', border:'none', color:'#666', fontSize:13, fontWeight:500, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:5 }}>{ic} {lb}</button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Instagram Carousel ────────────────────────────────────────────────────────
+export function InstagramCarousel({ images, caption, name }: { images:string[]; caption:string; name:string }) {
+  const [i, setI] = useState(0)
+  const slides = images.slice(0,10)
+
+  return (
+    <div style={{ background:'#fff', borderRadius:10, overflow:'hidden', fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', boxShadow:'0 2px 16px rgba(0,0,0,.18)', maxWidth:400 }}>
+      {/* Header */}
+      <div style={{ padding:'10px 14px', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:34, height:34, borderRadius:'50%', background:'linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)', padding:2, flexShrink:0 }}>
+          <div style={{ width:'100%', height:'100%', borderRadius:'50%', background:'linear-gradient(135deg,#7c6aff,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13 }}>{name[0]?.toUpperCase()}</div>
+        </div>
+        <span style={{ fontWeight:600, fontSize:13, color:'#000', flex:1 }}>{name.toLowerCase().replace(/\s+/g,'_')}</span>
+        <MoreHorizontal size={18} color='#000' />
+      </div>
+
+      {/* Image */}
+      <div style={{ position:'relative', aspectRatio:'4/5', background:'#000', overflow:'hidden' }}>
+        {slides[i] ? <img src={img(slides[i])} alt='' style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} /> : <div style={{ width:'100%', height:'100%', background:'#111' }} />}
+        {slides.length>1 && <>
+          <button onClick={()=>setI(x=>Math.max(0,x-1))} style={{ position:'absolute', left:8, top:'50%', transform:'translateY(-50%)', background:'rgba(255,255,255,.85)', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><ChevronLeft size={16}/></button>
+          <button onClick={()=>setI(x=>Math.min(slides.length-1,x+1))} style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'rgba(255,255,255,.85)', border:'none', borderRadius:'50%', width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}><ChevronRight size={16}/></button>
+          <div style={{ position:'absolute', top:10, right:10, background:'rgba(0,0,0,.5)', color:'#fff', borderRadius:12, padding:'2px 8px', fontSize:12 }}>{i+1}/{slides.length}</div>
+          <div style={{ position:'absolute', bottom:10, left:'50%', transform:'translateX(-50%)', display:'flex', gap:4 }}>
+            {slides.map((_,j)=><div key={j} style={{ width:6, height:6, borderRadius:'50%', background:j===i?'#3b82f6':'rgba(255,255,255,.5)' }}/>)}
+          </div>
+        </>}
+      </div>
+
+      {/* Actions */}
+      <div style={{ padding:'10px 14px 4px', display:'flex', alignItems:'center', gap:14 }}>
+        <Heart size={22} color='#000'/><MessageCircle size={22} color='#000'/><Send size={22} color='#000'/>
+        <Bookmark size={22} color='#000' style={{ marginLeft:'auto' }}/>
+      </div>
+      <div style={{ padding:'4px 14px', fontSize:13, fontWeight:600, color:'#000' }}>1,247 likes</div>
+      <div style={{ padding:'2px 14px 14px', fontSize:13, color:'#000', lineHeight:1.5 }}>
+        <span style={{ fontWeight:600 }}>{name.toLowerCase().replace(/\s+/g,'_')}</span>{' '}{caption.slice(0,140)}{caption.length>140?'… more':''}
+      </div>
+    </div>
+  )
+}
+
+// ── Instagram Stories ─────────────────────────────────────────────────────────
+export function InstagramStories({ images, captions, name }: { images:string[]; captions:string[]; name:string }) {
+  const [i, setI] = useState(0)
+  const frames = images.slice(0,4)
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:14 }}>
+      <div style={{ position:'relative', width:220, height:390, borderRadius:20, overflow:'hidden', background:'#000', boxShadow:'0 4px 28px rgba(0,0,0,.5)' }}>
+        {/* Progress */}
+        <div style={{ position:'absolute', top:10, left:10, right:10, display:'flex', gap:3, zIndex:10 }}>
+          {frames.map((_,j)=>(
+            <div key={j} style={{ flex:1, height:2.5, borderRadius:2, background:j<i?'#fff':j===i?'rgba(255,255,255,.9)':'rgba(255,255,255,.35)' }}/>
+          ))}
+        </div>
+        {/* Header */}
+        <div style={{ position:'absolute', top:22, left:10, right:10, display:'flex', alignItems:'center', gap:8, zIndex:10 }}>
+          <div style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(45deg,#f09433,#dc2743,#bc1888)', padding:1.5 }}>
+            <div style={{ width:'100%', height:'100%', borderRadius:'50%', background:'linear-gradient(135deg,#7c6aff,#a78bfa)' }}/>
+          </div>
+          <span style={{ color:'#fff', fontSize:11, fontWeight:600 }}>{name.slice(0,18)}</span>
+          <span style={{ color:'rgba(255,255,255,.6)', fontSize:10, marginLeft:2 }}>now</span>
+        </div>
+        {/* Image */}
+        {frames[i] ? <img src={img(frames[i])} alt='' style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }}/> : <div style={{ width:'100%', height:'100%', background:'linear-gradient(135deg,#1a1a24,#2a2a3a)' }}/>}
+        {/* Caption */}
+        {captions[i] && (
+          <div style={{ position:'absolute', bottom:50, left:12, right:12, background:'rgba(0,0,0,.65)', borderRadius:8, padding:'8px 10px', color:'#fff', fontSize:12, textAlign:'center', backdropFilter:'blur(4px)' }}>
+            {captions[i]}
+          </div>
+        )}
+        {/* Nav */}
+        <div style={{ position:'absolute', inset:0, display:'flex' }}>
+          <div style={{ flex:1, cursor:'pointer' }} onClick={()=>setI(x=>Math.max(0,x-1))}/>
+          <div style={{ flex:1, cursor:'pointer' }} onClick={()=>setI(x=>Math.min(frames.length-1,x+1))}/>
+        </div>
+      </div>
+      {/* Thumbnails */}
+      <div style={{ display:'flex', gap:6 }}>
+        {frames.map((src,j)=>(
+          <div key={j} onClick={()=>setI(j)} style={{ width:44, height:44, borderRadius:8, overflow:'hidden', cursor:'pointer', border:`2px solid ${j===i?'var(--accent)':'transparent'}`, flexShrink:0 }}>
+            <img src={img(src)} alt='' style={{ width:'100%', height:'100%', objectFit:'cover' }}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Instagram Reel ────────────────────────────────────────────────────────────
+export function InstagramReel({ videoUrl, caption, name }: { videoUrl?:string; caption:string; name:string }) {
+  return (
+    <div style={{ position:'relative', width:220, height:390, borderRadius:20, overflow:'hidden', background:'#000', boxShadow:'0 4px 28px rgba(0,0,0,.5)' }}>
+      {videoUrl
+        ? <video src={videoUrl} controls style={{ width:'100%', height:'100%', objectFit:'cover' }}/>
+        : <div style={{ width:'100%', height:'100%', background:'linear-gradient(135deg,#1a1a24,#2a2a3a)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12 }}>
+            <div style={{ fontSize:44 }}>🎬</div>
+            <span style={{ color:'var(--t3)', fontSize:12 }}>Reel preview</span>
+          </div>
+      }
+      <div style={{ position:'absolute', bottom:0, left:0, right:0, padding:'60px 12px 16px', background:'linear-gradient(transparent,rgba(0,0,0,.85))' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+          <div style={{ width:24, height:24, borderRadius:'50%', background:'linear-gradient(135deg,#7c6aff,#a78bfa)' }}/>
+          <span style={{ color:'#fff', fontSize:12, fontWeight:600 }}>{name.toLowerCase().replace(/\s+/g,'_')}</span>
+        </div>
+        <p style={{ color:'#fff', fontSize:11, lineHeight:1.4 }}>{caption.slice(0,80)}…</p>
+      </div>
+      <div style={{ position:'absolute', right:10, bottom:80, display:'flex', flexDirection:'column', gap:16, alignItems:'center' }}>
+        {[Heart, MessageCircle, Send].map((Icon,j)=>(
+          <div key={j} style={{ width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,.15)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon size={18} color='#fff'/>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

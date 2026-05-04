@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+ml_test_ui/node_modules/
+ml_test_ui/dist/
+ml_test_ui/.vite/
+
+# Runtime data
+uploads/
+output/
+logs/
+
+# Environment — never commit secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# HuggingFace model cache
+models/
+*.pt
+*.bin
+*.safetensors

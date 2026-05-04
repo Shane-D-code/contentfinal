@@ -1,0 +1,549 @@
+"""
+FastAPI backend — Content & Design Engine
+All configuration read from .env via config.py
+"""
+
+import uuid
+import shutil
+import time
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+import asyncio
+import uvicorn
+
+from config import settings
+from api.logger import get_logger, request_id_var, setup_logging
+
+# Initialise structured logging immediately (before any logger.* calls)
+setup_logging(
+    log_level=settings.log_level,
+    json_output=(settings.log_level.upper() != "DEBUG"),
+)
+
+logger = get_logger(__name__)
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="Content & Design Engine", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,   # Item 23: from .env, not hardcoded
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Scheduled cleanup (Item 3) — runs daily without Docker/cron ──────────────
+
+@app.on_event("startup")
+async def start_scheduler():
+    """
+    On startup:
+    1. Configure APScheduler daily cleanup (no cron/Docker needed)
+    2. Log which job backend is active (Celery or in-memory)
+    """
+    # ── Daily cleanup via APScheduler ─────────────────────────────────────────
+    try:
+        from api.scheduler import get_scheduler
+        from cleanup import run_cleanup
+
+        sched = get_scheduler()
+        sched.add_job(
+            lambda: run_cleanup(
+                upload_days=settings.upload_retention_days,
+                output_days=settings.output_retention_days,
+            ),
+            trigger="cron",
+            hour=3, minute=0,
+            id="daily_cleanup",
+            replace_existing=True,
+        )
+        logger.info("cleanup_scheduler_started", schedule="daily at 03:00")
+    except Exception as e:
+        logger.warning("cleanup_scheduler_failed", error=str(e))
+
+    # ── Log job backend ────────────────────────────────────────────────────────
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=1)
+        r.ping()
+        logger.info("job_backend", backend="celery+redis", url=settings.redis_url)
+    except Exception:
+        logger.info("job_backend", backend="apscheduler_in_memory",
+                    note="Redis unavailable — async jobs run in-process")
+
+# ── Request ID + timing middleware ────────────────────────────────────────────
+
+@app.middleware("http")
+async def request_middleware(request: Request, call_next):
+    rid = str(uuid.uuid4())[:8]
+    request_id_var.set(rid)
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = round((time.perf_counter() - start) * 1000)
+    logger.info(f"[{rid}] {request.method} {request.url.path} → {response.status_code} ({elapsed}ms)")
+    response.headers["X-Request-ID"] = rid
+    return response
+
+# ── Static files ──────────────────────────────────────────────────────────────
+
+app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
+
+# Also serve generated output files
+import os
+os.makedirs(str(settings.output_dir), exist_ok=True)
+app.mount("/output", StaticFiles(directory=str(settings.output_dir)), name="output")
+
+# ── Lazy model singletons ─────────────────────────────────────────────────────
+
+_quality_assessor = None
+_face_detector = None
+_content_understander = None
+_video_processor = None
+_engine = None
+
+
+def get_quality_assessor():
+    global _quality_assessor
+    if _quality_assessor is None:
+        from content_engine.models.quality import QualityAssessor
+        _quality_assessor = QualityAssessor()
+    return _quality_assessor
+
+
+def get_face_detector():
+    global _face_detector
+    if _face_detector is None:
+        from content_engine.models.face_detection import FaceDetector
+        _face_detector = FaceDetector()
+    return _face_detector
+
+
+def get_content_understander():
+    global _content_understander
+    if _content_understander is None:
+        from content_engine.models.content_understanding import ContentUnderstander
+        _content_understander = ContentUnderstander()
+    return _content_understander
+
+
+def get_video_processor():
+    global _video_processor
+    if _video_processor is None:
+        from content_engine.models.video_processing import VideoProcessor
+        _video_processor = VideoProcessor()
+    return _video_processor
+
+
+def get_engine(event_description: str = "Event"):
+    global _engine
+    if _engine is None:
+        from content_engine import ContentEngine
+        _engine = ContentEngine(event_description=event_description)
+    return _engine
+
+
+# ── Item 2: File validation ───────────────────────────────────────────────────
+
+async def validate_upload(file: UploadFile) -> Path:
+    """
+    Validate MIME type (via python-magic, not just Content-Type header)
+    and file size, then save to uploads/.
+    Raises HTTP 400 for invalid files, 413 for oversized files.
+    """
+    # Read entire file into memory for size + magic inspection
+    data = await file.read()
+
+    # Size check
+    if len(data) > settings.max_file_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File '{file.filename}' is {len(data) // (1024*1024)}MB. "
+                f"Maximum allowed: {settings.max_file_size_mb}MB."
+            ),
+        )
+
+    # Real MIME type from file bytes (not spoofable via Content-Type header)
+    try:
+        import magic as libmagic
+        detected_mime = libmagic.from_buffer(data[:2048], mime=True)
+    except Exception:
+        # python-magic unavailable — fall back to Content-Type header
+        detected_mime = file.content_type or "application/octet-stream"
+
+    if detected_mime not in settings.allowed_mime_types:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File '{file.filename}' has unsupported type '{detected_mime}'. "
+                f"Allowed: {', '.join(settings.allowed_mime_types)}"
+            ),
+        )
+
+    # Save to disk
+    ext = Path(file.filename or "upload").suffix.lower() or ".bin"
+    dest = settings.upload_dir / f"{uuid.uuid4().hex}{ext}"
+    dest.write_bytes(data)
+
+    logger.info(
+        "upload_saved",
+        filename=file.filename,
+        dest=dest.name,
+        size_kb=len(data) // 1024,
+        mime=detected_mime,
+    )
+    return dest
+
+
+async def validate_uploads(files: List[UploadFile]) -> List[Path]:
+    """Validate and save a list of uploads."""
+    paths = []
+    for f in files:
+        paths.append(await validate_upload(f))
+    return paths
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "2.0.0"}
+
+
+@app.get("/api/model-status")
+def model_status():
+    status = {}
+    for pkg in ["torch", "transformers", "ultralytics", "sentence_transformers",
+                "cv2", "librosa", "scenedetect", "celery", "redis"]:
+        try:
+            __import__(pkg)
+            status[pkg] = "available"
+        except ImportError:
+            status[pkg] = "not installed"
+    return status
+
+
+# ── Model 1: Quality ──────────────────────────────────────────────────────────
+
+@app.post("/api/quality")
+async def assess_quality(file: UploadFile = File(...)):
+    path = await validate_upload(file)
+    try:
+        result = get_quality_assessor().assess(str(path))
+        return {"filename": file.filename, "file_url": f"/uploads/{path.name}", "scores": result}
+    except Exception as e:
+        logger.error(f"Quality assessment failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Model 2: Faces ────────────────────────────────────────────────────────────
+
+@app.post("/api/faces")
+async def detect_faces(file: UploadFile = File(...)):
+    """
+    Returns face count, per-face confidences, AND bounding boxes
+    so the frontend can draw overlays. (Item 5)
+    """
+    path = await validate_upload(file)
+    try:
+        detector = get_face_detector()
+        results = detector.model.predict(str(path), conf=settings.face_confidence_threshold, verbose=False)
+
+        face_count = 0
+        confidences = []
+        bboxes = []
+
+        if results and results[0].boxes is not None:
+            boxes = results[0].boxes
+            face_count = len(boxes)
+            confidences = [round(c, 3) for c in boxes.conf.cpu().tolist()]
+            # Return normalised bboxes [x1,y1,x2,y2] as fractions of image size
+            from PIL import Image as PILImage
+            img = PILImage.open(str(path))
+            w, h = img.size
+            for box in boxes.xyxy.cpu().tolist():
+                bboxes.append({
+                    "x1": round(box[0] / w, 4),
+                    "y1": round(box[1] / h, 4),
+                    "x2": round(box[2] / w, 4),
+                    "y2": round(box[3] / h, 4),
+                })
+
+        return {
+            "filename": file.filename,
+            "file_url": f"/uploads/{path.name}",
+            "face_count": face_count,
+            "confidences": confidences,
+            "bboxes": bboxes,
+            "image_width": w if face_count >= 0 else 0,
+            "image_height": h if face_count >= 0 else 0,
+        }
+    except Exception as e:
+        logger.error(f"Face detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Model 3: Content ──────────────────────────────────────────────────────────
+
+@app.post("/api/content")
+async def understand_content(file: UploadFile = File(...)):
+    path = await validate_upload(file)
+    try:
+        result = get_content_understander().understand_image(str(path))
+        return {"filename": file.filename, "file_url": f"/uploads/{path.name}", **result}
+    except Exception as e:
+        logger.error(f"Content understanding failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Model 4: Video highlights ─────────────────────────────────────────────────
+
+@app.post("/api/highlights")
+async def extract_highlights(file: UploadFile = File(...), target_duration: int = 45):
+    path = await validate_upload(file)
+    try:
+        highlights = get_video_processor().extract_highlights(str(path), target_duration=target_duration)
+        return {
+            "filename": file.filename,
+            "file_url": f"/uploads/{path.name}",
+            "highlights": highlights,
+            "total_selected_seconds": round(sum(h["end"] - h["start"] for h in highlights), 2),
+        }
+    except Exception as e:
+        logger.error(f"Highlight extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Synchronous pipeline (kept for small batches / testing) ──────────────────
+
+@app.post("/api/pipeline")
+async def run_pipeline(
+    files: List[UploadFile] = File(...),
+    event_description: str = Form("Event"),
+):
+    paths = [str(p) for p in await validate_uploads(files)]
+    try:
+        engine = get_engine(event_description)
+        selections = engine.select_assets(paths)
+        results = _serialise_selections(selections)
+        return {"event": event_description, "total": len(results), "selections": results}
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Item 1: Async pipeline via Celery ─────────────────────────────────────────
+
+@app.post("/api/pipeline/async")
+async def run_pipeline_async(
+    files: List[UploadFile] = File(...),
+    event_description: str = Form("Event"),
+):
+    """
+    Submit pipeline job. Returns job_id immediately.
+    Uses Celery if Redis is available, otherwise APScheduler in-process.
+    Poll /api/jobs/{job_id}/status for progress.
+    """
+    paths = [str(p) for p in await validate_uploads(files)]
+
+    # Try Celery first
+    try:
+        import redis as redis_lib
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
+        from api.tasks import run_pipeline_task
+        task = run_pipeline_task.delay(paths, event_description)
+        return {"job_id": task.id, "status": "queued", "backend": "celery"}
+    except Exception:
+        pass
+
+    # Fallback: APScheduler in-memory
+    from api.scheduler import submit_pipeline_job
+    job_id = submit_pipeline_job(paths, event_description)
+    return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
+
+
+@app.post("/api/generate/async")
+async def run_generate_async(
+    files: List[UploadFile] = File(...),
+    event_name: str = Form("Event"),
+    event_description: str = Form("Event"),
+):
+    """
+    Submit full generation job. Returns job_id immediately.
+    Uses Celery if Redis is available, otherwise APScheduler in-process.
+    """
+    paths = [str(p) for p in await validate_uploads(files)]
+
+    # Try Celery first
+    try:
+        import redis as redis_lib
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
+        from api.tasks import run_generate_task
+        task = run_generate_task.delay(paths, event_name, event_description)
+        return {"job_id": task.id, "status": "queued", "backend": "celery"}
+    except Exception:
+        pass
+
+    # Fallback: APScheduler in-memory
+    from api.scheduler import submit_generate_job
+    job_id = submit_generate_job(paths, event_name, event_description)
+    return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
+
+
+@app.get("/api/jobs/{job_id}/status")
+async def job_status(job_id: str):
+    """
+    Poll job status. Works for both Celery and APScheduler jobs.
+    Returns: {job_id, status, progress, backend, error?}
+    """
+    # Try APScheduler in-memory store first (faster lookup)
+    from api.scheduler import get_job
+    job = get_job(job_id)
+    if job:
+        return {
+            "job_id":   job_id,
+            "status":   job["status"],
+            "progress": job.get("progress", {}),
+            "backend":  "apscheduler",
+            "error":    job.get("error"),
+        }
+
+    # Try Celery
+    try:
+        from celery.result import AsyncResult
+        from api.worker import celery_app
+        result = AsyncResult(job_id, app=celery_app)
+        info = result.info or {}
+        return {
+            "job_id":   job_id,
+            "status":   result.state,
+            "progress": info if isinstance(info, dict) else {},
+            "backend":  "celery",
+            "error":    str(info) if result.state == "FAILURE" else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found: {e}")
+
+
+@app.get("/api/jobs/{job_id}/result")
+async def job_result(job_id: str):
+    """Retrieve completed job result (both backends)."""
+    # APScheduler store
+    from api.scheduler import get_job
+    job = get_job(job_id)
+    if job:
+        if job["status"] == "completed":
+            return job["result"]
+        elif job["status"] == "failed":
+            raise HTTPException(status_code=500, detail=job.get("error", "Job failed"))
+        else:
+            return {"job_id": job_id, "status": job["status"], "message": "Job not yet complete"}
+
+    # Celery
+    try:
+        from celery.result import AsyncResult
+        from api.worker import celery_app
+        result = AsyncResult(job_id, app=celery_app)
+        if result.state == "SUCCESS":
+            return result.result
+        elif result.state == "FAILURE":
+            raise HTTPException(status_code=500, detail=str(result.info))
+        else:
+            return {"job_id": job_id, "status": result.state, "message": "Job not yet complete"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.websocket("/ws/jobs/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    try:
+        while True:
+            # Reuse job_status logic
+            status_data = job_status(job_id)
+            # Add progress/step for frontend
+            if 'progress' in status_data:
+                status_data['progress'] = status_data['progress'].get('pct', 0) / 100
+                status_data['step'] = status_data['progress'].get('step', 'Unknown')
+            await websocket.send_json(status_data)
+            await asyncio.sleep(1)
+    except Exception as e:
+        await websocket.send_json({"error": str(e)})
+    finally:
+        await websocket.close()
+
+
+# ── Synchronous generate (kept for testing) ───────────────────────────────────
+
+@app.post("/api/generate")
+async def generate_content(
+    files: List[UploadFile] = File(...),
+    event_name: str = Form("Event"),
+    event_description: str = Form("Event"),
+):
+    paths = [str(p) for p in await validate_uploads(files)]
+    return await _sync_generate(paths, event_name, event_description)
+
+
+async def _sync_generate(paths, event_name, event_description):
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ce_gen_"))
+    try:
+        for p in paths:
+            shutil.copy(p, tmp_dir / Path(p).name)
+        from content_engine.orchestrator import ContentOrchestrator
+        orch = ContentOrchestrator(event_name=event_name, event_description=event_description)
+        out_dir = orch.run(str(tmp_dir), output_root=str(settings.output_dir))
+        output_files = {f.name: str(f.resolve()) for f in sorted(out_dir.iterdir()) if f.is_file()}
+        return {"event": event_name, "output_dir": str(out_dir.resolve()), "files": output_files}
+    except Exception as e:
+        logger.error(f"Generate failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _serialise_selections(selections) -> list:
+    results = []
+    for s in selections:
+        file_name = Path(s.asset.path).name
+        results.append({
+            "filename": file_name,
+            "file_url": f"/uploads/{file_name}",
+            "intended_use": s.intended_use,
+            "confidence": round(s.confidence, 4),
+            "low_confidence": s.confidence < 0.5,
+            "selection_reason": s.selection_reason,
+            "scores": {
+                "quality": round(s.asset.quality_score, 4),
+                "aesthetic": round(s.asset.aesthetic_score, 4),
+                "final": round(s.asset.final_score, 4),
+            },
+            "face_count": s.asset.face_count,
+            "bboxes": [],
+            "scene_concepts": s.asset.scene_concepts[:8],
+            "asset_type": s.asset.asset_type,
+            "duration": s.asset.duration,
+            "highlight_clips": s.asset.highlight_clips or [],
+        })
+    return results
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "api.main:app",
+        host=settings.api_host,
+        port=settings.api_port,
+        reload=True,
+        log_level=settings.log_level.lower(),
+    )
