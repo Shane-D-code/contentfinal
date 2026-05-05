@@ -41,3 +41,29 @@ export const runPipelineAsync = (files:File[], desc:string)              => api.
 export const generateAsync    = (files:File[], name:string, desc:string) => api.post<{job_id:string;status:string;backend:string}>('/api/generate/async', fd(files,{event_name:name,event_description:desc})).then(r=>r.data)
 export const getJobStatus     = (id:string)                              => api.get<JobStatus>(`/api/jobs/${id}/status`).then(r=>r.data)
 export const getJobResult     = (id:string)                              => api.get<any>(`/api/jobs/${id}/result`).then(r=>r.data)
+
+export interface RegenerateOptions {
+  eventName: string
+  eventDescription?: string
+  platform?: 'linkedin' | 'instagram' | 'reel' | 'stories' | 'all'
+  sceneConcepts?: string[]
+  faceCount?: number
+}
+export interface RegenerateResult {
+  backend: 'groq' | 'template' | 'local_llm'
+  event: string
+  linkedin?: string
+  instagram?: string
+  reel?: string
+  stories?: string[]
+}
+
+export const regenerateCaptions = (opts: RegenerateOptions): Promise<RegenerateResult> => {
+  const f = new FormData()
+  f.append('event_name',        opts.eventName)
+  f.append('event_description', opts.eventDescription ?? opts.eventName)
+  f.append('platform',          opts.platform ?? 'all')
+  f.append('scene_concepts',    (opts.sceneConcepts ?? []).join(','))
+  f.append('face_count',        String(opts.faceCount ?? 0))
+  return api.post<RegenerateResult>('/api/captions/regenerate', f).then(r => r.data)
+}

@@ -30,6 +30,7 @@ celerybeat-schedule.db
 *.db
 *.sqlite
 *.sqlite3
+dump.rdb
 
 # ── Environment ───────────────────────────────────────────────────────────────
 .env

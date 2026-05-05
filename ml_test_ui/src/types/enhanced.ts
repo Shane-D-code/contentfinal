@@ -16,10 +16,10 @@ export interface CaptionEdit {
 }
 
 export type AnalyticsEvent = {
-  type: 'job_start' | 'job_complete' | 'feedback' | 'export' | 'upload'
+  type: 'job_start' | 'job_complete' | 'feedback' | 'export' | 'upload' | 'regen'
   jobId?: string
   duration?: number
   score?: number
-  platform?: Platform
+  platform?: Platform | string
 }
 

@@ -218,13 +218,16 @@ class ContentOrchestrator:
 
         captions = {
             "linkedin_caption.txt": self._copy.generate_linkedin_caption(
-                self.event_name, collage_assets or all_selected_assets
+                self.event_name, collage_assets or all_selected_assets,
+                event_description=self.event_description,
             ),
             "instagram_caption.txt": self._copy.generate_instagram_caption(
-                self.event_name, collage_assets or all_selected_assets
+                self.event_name, collage_assets or all_selected_assets,
+                event_description=self.event_description,
             ),
             "instagram_reel_caption.txt": self._copy.generate_reel_caption(
-                self.event_name, all_selected_assets
+                self.event_name, all_selected_assets,
+                event_description=self.event_description,
             ),
         }
 
@@ -232,7 +235,9 @@ class ContentOrchestrator:
             (out_dir / filename).write_text(text, encoding="utf-8")
 
         story_caps = self._copy.generate_story_captions(
-            self.event_name, len(story_assets)
+            self.event_name, len(story_assets),
+            assets=story_assets or all_selected_assets,
+            event_description=self.event_description,
         )
         story_text = "\n".join(
             f"Story {i}: {cap}" for i, cap in enumerate(story_caps, 1)

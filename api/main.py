@@ -232,12 +232,16 @@ def model_status():
     """Check which ML packages are installed."""
     status = {}
     for pkg in ["torch", "transformers", "ultralytics", "sentence_transformers",
-                "cv2", "librosa", "scenedetect", "celery", "redis", "flower"]:
+                "cv2", "librosa", "scenedetect", "celery", "redis", "flower", "groq"]:
         try:
             __import__(pkg)
             status[pkg] = "available"
         except ImportError:
             status[pkg] = "not installed"
+
+    # Check Groq key configured
+    status["groq_configured"] = "yes" if settings.groq_api_key else "no"
+    status["groq_model"]      = settings.groq_model if settings.groq_api_key else "—"
     return status
 
 
@@ -512,6 +516,59 @@ async def generate_content(
 ):
     paths = [str(p) for p in await validate_uploads(files)]
     return await _sync_generate(paths, event_name, event_description)
+
+
+# ── Groq caption regeneration (on-demand, no ML needed) ──────────────────────
+
+@app.post("/api/captions/regenerate")
+async def regenerate_captions(
+    event_name: str = Form(...),
+    event_description: str = Form(""),
+    platform: str = Form("all"),   # "linkedin" | "instagram" | "reel" | "stories" | "all"
+    scene_concepts: str = Form(""),  # comma-separated detected concepts
+    face_count: int = Form(0),
+):
+    """
+    Regenerate captions using Groq without re-running the full ML pipeline.
+    Useful for the frontend "Regenerate" button in ResultsPage.
+    """
+    from content_engine.copy_generator import CopyGenerator
+    from content_engine.data_types import AssetMetadata
+
+    # Build a minimal synthetic asset list from the provided context
+    concepts = [c.strip() for c in scene_concepts.split(",") if c.strip()]
+    relevance = {c: 0.8 for c in concepts}
+
+    synthetic_asset = AssetMetadata(
+        path="synthetic",
+        asset_type="image",
+        quality_score=0.8,
+        aesthetic_score=0.7,
+        face_count=face_count,
+        face_confidences=[0.9] * min(face_count, 5),
+        relevance_scores=relevance,
+        scene_concepts=concepts,
+        final_score=0.75,
+    )
+    assets = [synthetic_asset]
+
+    gen = CopyGenerator()
+    result: dict = {"backend": gen.backend, "event": event_name}
+
+    try:
+        if platform in ("linkedin", "all"):
+            result["linkedin"] = gen.generate_linkedin_caption(event_name, assets, event_description)
+        if platform in ("instagram", "all"):
+            result["instagram"] = gen.generate_instagram_caption(event_name, assets, event_description)
+        if platform in ("reel", "all"):
+            result["reel"] = gen.generate_reel_caption(event_name, assets, event_description)
+        if platform in ("stories", "all"):
+            result["stories"] = gen.generate_story_captions(event_name, 4, assets, event_description)
+    except Exception as e:
+        logger.error(f"Caption regeneration failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return result
 
 
 async def _sync_generate(paths, event_name, event_description):

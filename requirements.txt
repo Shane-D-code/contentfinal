@@ -36,6 +36,9 @@ flower>=2.0.0
 # ── Scheduled cleanup fallback ────────────────────────────────────────────────
 apscheduler>=3.10.0
 
+# ── Groq LLM API ─────────────────────────────────────────────────────────────
+groq>=1.0.0
+
 # ── File type validation ──────────────────────────────────────────────────────
 # python-magic requires libmagic:
 #   macOS:  brew install libmagic
