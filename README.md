@@ -18,6 +18,67 @@ Takes 50–150 mixed assets as input and produces LinkedIn posts, Instagram caro
 
 ---
 
+## GFF 2025 Brand Challenge
+
+This engine supports the GFF 2025 challenge: **Brand Photo Segregation**.
+
+### What it does
+1. **Brand Segregation** — Identifies and extracts photos belonging to each brand using CLIP visual similarity to render references
+2. **Brand-aware Content** — Generates carousel, reel, and stories per brand with StepOne's brand voice
+3. **Per-brand Output** — One folder per brand, clearly organized
+
+### Usage
+
+```bash
+python generate_gff.py \
+  --assets path/to/GFF_photos/ \
+  --brands "Brand A:path/to/render1.jpg,path/to/render2.jpg" \
+           "Brand B:path/to/render3.jpg" \
+           "Brand C:path/to/render4.jpg" \
+           "Brand D:path/to/render5.jpg" \
+  --event "GFF 2025" \
+  --output ./output
+```
+
+### Selection Logic
+
+| Step | Action |
+|------|--------|
+| 1 | Load brand render images, compute CLIP embeddings |
+| 2 | For each photo: compute cosine similarity to each brand |
+| 3 | Assign to brand with highest similarity IF ≥ threshold (0.60) |
+| 4 | Unmatched photos → saved for manual review |
+| 5 | Within brand: quality (30%) + aesthetic (20%) + faces (30%) + concepts (20%) |
+
+### Output Structure
+
+```
+output/GFF_2025/
+├── selection_report.json      # Full segregation data
+├── selection_logic.md         # Documented decision process
+├── unmatched/                 # Unassigned assets
+├── Brand_A/
+│   ├── carousel_1.jpg … _N.jpg
+│   ├── instagram_caption.txt
+│   ├── reel.mp4
+│   ├── reel_caption.txt
+│   ├── stories/story_1.jpg … _4.jpg
+│   └── case_study.md
+├── Brand_B/  ...
+└── Brand_C/  ...
+```
+
+### Brand Voice
+
+All copy follows StepOne's tone of voice:
+- **Clear over clever** — we earn trust with precision, not wordplay
+- **Active over passive** — we act, we deliver, we create
+- **Specific over vague** — concrete examples and numbers beat abstract claims
+- **Confident over tentative** — we say "we do" and "we deliver"
+- **Human over corporate** — contractions are fine; humanity is a feature
+
+---
+
 ## Quick start
 
 ### 1. Prerequisites
