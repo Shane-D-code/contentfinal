@@ -18,6 +18,14 @@ Event type detection:
   default         → generic professional event
 
 A/B variants: generate_variants() returns {"primary": str, "variants": [str, ...]}
+
+Brand voice integration:
+  All captions follow StepOne's brand voice:
+  - Clear over clever
+  - Active over passive
+  - Specific over vague
+  - Confident over tentative
+  - Human over corporate
 """
 
 import os
@@ -27,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
 from content_engine.data_types import AssetMetadata
+from content_engine.brand_voice import stepone_brand_voice, BrandVoice
 
 try:
     from api.logger import get_logger
@@ -626,3 +635,211 @@ class CopyGenerator:
             v1 = f"we documented everything at {event_name} 🎬 watch till the end\n\n{tag}"
             v2 = f"this is what {event_name} actually looked like 👀\n\n{tag} #BehindTheScenes"
             return {"primary": primary, "variants": [v1, v2][:n-1], "backend": self.backend}
+
+    # ── Brand-aware captions (GFF 2025 challenge) ──────────────────────────────
+
+    def generate_brand_carousel_caption(
+        self,
+        brand_name: str,
+        event_name: str,
+        assets: List[AssetMetadata],
+        event_description: str = "",
+    ) -> str:
+        """
+        Generate Instagram carousel caption with brand awareness.
+        Follows StepOne brand voice: clear, active, specific, confident, human.
+        """
+        concepts = _top_concepts(assets, 3)
+        concept_str = ", ".join(concepts) if concepts else "highlights"
+
+        if self._groq:
+            try:
+                ctx = _build_context(event_name, assets, event_description)
+                ctx.event_name = f"{brand_name} at {event_name}"
+
+                prompt = f"""You are writing an Instagram carousel caption for {brand_name}.
+
+BRAND VOICE REQUIREMENTS:
+- Clear over clever — earn trust with precision
+- Active over passive — we act, we deliver
+- Specific over vague — concrete examples beat abstract claims
+- Confident over tentative — say "we do", not "we try to"
+- Human over corporate — lowercase is fine, emoji used naturally
+
+EVENT CONTEXT:
+- Brand: {brand_name}
+- Event: {event_name}
+- Key moments captured: {concept_str}
+- Crowd energy: {ctx.total_faces} people in key shots
+
+REQUIREMENTS:
+- 4-6 short punchy lines (not an essay)
+- Casual, lowercase, conversational
+- 2-3 emojis used naturally
+- End with clear CTA: "swipe →" or "save this"
+- Include {ctx.hashtag} + 2-3 relevant hashtags
+- Max 100 words
+- NOT a LinkedIn repost — Instagram native tone
+
+Write the caption:"""
+
+                result = self._groq.complete(prompt, max_tokens=180)
+                _log.info("brand_carousel_caption_done", brand=brand_name, chars=len(result))
+
+                # Validate against brand voice
+                validation = stepone_brand_voice.validate_copy(result)
+                if validation["issues"]:
+                    _log.warning("caption_brand_voice_issues", brand=brand_name, issues=validation["issues"])
+
+                return result
+            except Exception as e:
+                _log.warning("brand_caption_failed", error=str(e), brand=brand_name)
+
+        # Template fallback with brand voice
+        return _brand_carousel_template(brand_name, event_name, assets)
+
+    def generate_brand_reel_caption(
+        self,
+        brand_name: str,
+        event_name: str,
+        assets: List[AssetMetadata],
+        event_description: str = "",
+    ) -> str:
+        """
+        Generate Instagram Reel caption with brand awareness.
+        30-60 second reel, sequenced storytelling.
+        """
+        concepts = _top_concepts(assets, 2)
+
+        if self._groq:
+            try:
+                prompt = f"""Write an Instagram Reel caption for {brand_name} at {event_name}.
+
+BRAND VOICE:
+- Clear over clever, active over passive, specific over vague
+- Confident — we deliver, we create, we build
+- Human — lowercase, contractions, authentic
+
+CONTEXT:
+- Brand: {brand_name}
+- Event: {event_name}
+- Key themes: {', '.join(concepts) if concepts else 'event highlights'}
+- Duration: 30-60 seconds
+
+REQUIREMENTS:
+- Hook in first line (makes them stop scrolling)
+- 3-4 short lines max
+- Energetic, punchy
+- Ends with tag CTA: "tag someone who needs to see this" or "share with your team"
+- Include 2-3 hashtags
+- Max 60 words
+- Instagram native — NOT corporate or LinkedIn style
+
+Write the caption:"""
+
+                result = self._groq.complete(prompt, max_tokens=120)
+                _log.info("brand_reel_caption_done", brand=brand_name, chars=len(result))
+                return result
+            except Exception as e:
+                _log.warning("brand_reel_caption_failed", error=str(e), brand=brand_name)
+
+        return _brand_reel_template(brand_name, event_name, assets)
+
+    def generate_brand_story_captions(
+        self,
+        brand_name: str,
+        event_name: str,
+        num_slides: int = 4,
+        assets: Optional[List[AssetMetadata]] = None,
+        event_description: str = "",
+    ) -> List[str]:
+        """
+        Generate sequential story captions with brand awareness.
+        3-4 vertical frames that lead into each other.
+        """
+        concepts = _top_concepts(assets, 3) if assets else []
+
+        if self._groq and assets:
+            try:
+                prompt = f"""Write {num_slides} sequential Instagram Story captions for {brand_name} at {event_name}.
+
+BRAND VOICE:
+- Clear over clever, active over passive, specific over vague
+- Human over corporate — short, punchy, conversational
+
+STORY STRUCTURE (sequential narrative):
+- Frame 1: Hook — "this is what happened at {event_name}..."
+- Frame 2-3: Build — key moments, energy, insights
+- Frame 4: CTA — "save this", "tag someone", "share"
+
+CONTEXT:
+- Brand: {brand_name}
+- Event: {event_name}
+- Key themes: {', '.join(concepts) if concepts else 'event highlights'}
+
+REQUIREMENTS:
+- Each caption: 1-2 short lines max
+- Sequential — each frame leads into the next
+- Vertical format — text readable on mobile
+- End with clear CTA in final frame
+- No hashtags needed for stories (optional)
+- Total: {num_slides} captions, one per line, separated by |
+
+Write the story captions (format: frame1 | frame2 | frame3 | frame4):"""
+
+                result = self._groq.complete(prompt, max_tokens=200)
+
+                # Split by | delimiter
+                captions = [c.strip() for c in result.split("|")][:num_slides]
+                if len(captions) < num_slides:
+                    captions = (captions + _story_captions_template(event_name, num_slides))[:num_slides]
+
+                _log.info("brand_story_captions_done", brand=brand_name, frames=len(captions))
+                return captions
+            except Exception as e:
+                _log.warning("brand_story_captions_failed", error=str(e), brand=brand_name)
+
+        return _brand_story_template(brand_name, event_name, num_slides)
+
+
+# ── Brand-aware templates ─────────────────────────────────────────────────────
+
+def _brand_carousel_template(brand_name: str, event_name: str, assets: List[AssetMetadata]) -> str:
+    """Template for brand carousel caption (fallback when LLM unavailable)."""
+    concepts = _top_concepts(assets, 3)
+    concept_str = ", ".join(concepts) if concepts else "highlights"
+
+    return f"""{brand_name} was in the room.
+
+ here's what we captured: {concept_str}
+
+ the moments that mattered. the people who showed up. the energy you can't fake.
+
+ swipe through for the full story →
+
+ #{brand_name.replace(' ', '')} #GFF2025 #EventHighlights"""
+
+
+def _brand_reel_template(brand_name: str, event_name: str, assets: List[AssetMetadata]) -> str:
+    """Template for brand reel caption."""
+    concepts = _top_concepts(assets, 2)
+    concept_str = ", ".join(concepts) if concepts else "highlights"
+
+    return f"""we documented {brand_name} at {event_name} 🎬
+
+ {concept_str} — the moments that mattered
+
+ watch till the end 👀
+
+ #{brand_name.replace(' ', '')} #GFF2025 #BehindTheScenes"""
+
+
+def _brand_story_template(brand_name: str, event_name: str, num_slides: int = 4) -> List[str]:
+    """Template for brand story captions (sequential narrative)."""
+    templates = [
+        f"this is what {brand_name} looked like at {event_name}...",
+        f"the energy was real. the moments were worth capturing.",
+        f"we build experiences that move people.",
+        f"save this for next time → #{brand_name.replace(' ', '')}",
+    ]
+    return templates[:num_slides]
