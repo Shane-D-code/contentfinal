@@ -3,7 +3,7 @@ StepOne Brand Voice Configuration
 Defines tone of voice, vocabulary, and language guidelines per the Brand Guidelines.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict
 
 
@@ -16,16 +16,16 @@ class BrandVoice:
     """
 
     # Core tone principles (must follow all)
-    tone_principles: List[str] = [
+    tone_principles: List[str] = field(default_factory=lambda: [
         "Clear over clever — we earn trust with precision, not wordplay",
         "Active over passive — we act, we deliver, we create",
         "Specific over vague — concrete examples and numbers beat abstract claims",
         "Confident over tentative — we say 'we do' and 'we deliver', not 'we try to'",
         "Human over corporate — contractions are fine; humanity is a feature",
-    ]
+    ])
 
     # Signature vocabulary (preferred terms)
-    signature_vocabulary: Dict[str, List[str]] = {
+    signature_vocabulary: Dict[str, List[str]] = field(default_factory=lambda: {
         "insight": [
             "audience truths", "signals", "behaviors", "barriers", "motivations",
             "behavioural drivers", "attention patterns", "engagement gaps"
@@ -38,10 +38,10 @@ class BrandVoice:
             "outcomes", "recall", "engagement", "conversion", "loyalty", "community",
             "measurable ROI", "lasting impression", "behavioural shift"
         ],
-    }
+    })
 
     # Language to use (preferred)
-    language_to_use: List[str] = [
+    language_to_use: List[str] = field(default_factory=lambda: [
         "insight-driven",
         "experience-led",
         "measurable impact",
@@ -53,10 +53,10 @@ class BrandVoice:
         "strategic",
         "creative",
         "precise",
-    ]
+    ])
 
     # Language to avoid
-    language_to_avoid: List[str] = [
+    language_to_avoid: List[str] = field(default_factory=lambda: [
         "creative agency",
         "event management",
         "event solutions",
@@ -68,20 +68,20 @@ class BrandVoice:
         "cutting-edge",
         "world-class",
         "innovative solutions",
-    ]
+    ])
 
     # Tone by context
-    tone_by_context: Dict[str, str] = {
+    tone_by_context: Dict[str, str] = field(default_factory=lambda: {
         "pitch": "bold, premium, visionary",
         "website": "bold, premium, visionary",
         "client_comms": "calm, proactive, reassuring",
         "thought_leadership": "provocative and evidence-led",
         "instagram": "visual-first, human, authentic, brand-aware",
         "linkedin": "professional, insightful, evidence-led",
-    }
+    })
 
     # Instagram-specific guidelines
-    instagram_guidelines: Dict[str, List[str]] = {
+    instagram_guidelines: Dict[str, List[str]] = field(default_factory=lambda: {
         "do": [
             "Lead with a hook in the first line",
             "Use short sentences and punchy language",
@@ -96,14 +96,14 @@ class BrandVoice:
             "Use more than 5 hashtags",
             "Be vague — specificity is memorable",
         ],
-    }
+    })
 
     # Instagram caption templates
-    caption_templates: Dict[str, str] = {
+    caption_templates: Dict[str, str] = field(default_factory=lambda: {
         "carousel": "{hook}\n\n{body}\n\n{cta}",
         "reel": "{hook} 👀\n\n{body}\n\n{cta}",
         "story": "{text}",
-    }
+    })
 
     def get_context_guidance(self, context: str) -> str:
         """Get tone guidance for a specific context."""
