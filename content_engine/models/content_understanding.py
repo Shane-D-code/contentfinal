@@ -63,21 +63,18 @@ class ContentUnderstander:
 
     @property
     def florence(self):
-        """Load Florence-2 base model on first use."""
+        """Load Florence-2 base model on first use — always CPU (MPS crashes with float16)."""
         if self._florence_model is None:
             import torch
-            from transformers import (
-                AutoModelForCausalLM,
-                AutoProcessor,
-            )
-            device      = "mps" if torch.backends.mps.is_available() else "cpu"
-            torch_dtype = torch.float16 if device != "cpu" else torch.float32
+            from transformers import AutoModelForCausalLM, AutoProcessor
+            from content_engine.utils.mps_safe import FLORENCE_DEVICE, FLORENCE_DTYPE
 
             self._florence_model = AutoModelForCausalLM.from_pretrained(
                 "microsoft/Florence-2-base",
-                torch_dtype=torch_dtype,
+                torch_dtype=FLORENCE_DTYPE,
                 trust_remote_code=True,
-            ).to(device)
+                attn_implementation="eager",
+            ).to(FLORENCE_DEVICE)
 
             self._florence_processor = AutoProcessor.from_pretrained(
                 "microsoft/Florence-2-base",
@@ -87,12 +84,11 @@ class ContentUnderstander:
 
     @property
     def clip(self):
-        """Load CLIP model on first use."""
+        """Load CLIP model on first use — MPS when available."""
         if self._clip_model is None:
-            import torch
             from sentence_transformers import SentenceTransformer
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-            self._clip_model = SentenceTransformer("clip-ViT-B-32", device=device)
+            from content_engine.utils.mps_safe import MPS_DEVICE
+            self._clip_model = SentenceTransformer("clip-ViT-B-32", device=MPS_DEVICE)
         return self._clip_model
 
     # ── Object detection ────────────────────────────────────────────────────────
@@ -218,6 +214,9 @@ class ContentUnderstander:
             detected_labels = self._run_object_detection(image_path)
         except Exception:
             detected_labels = []
+        finally:
+            from content_engine.utils.mps_safe import empty_cache
+            empty_cache()
 
         relevance_scores   = self._score_concepts(detected_labels)
         concept_match_score = max(relevance_scores.values()) if relevance_scores else 0.0

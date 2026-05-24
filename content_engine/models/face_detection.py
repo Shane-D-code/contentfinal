@@ -46,11 +46,9 @@ class FaceDetector:
     @property
     def model(self):
         if self._model is None:
-            import torch
             from ultralytics import YOLO
             from huggingface_hub import hf_hub_download
 
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
             model_path = hf_hub_download(
                 repo_id="AdamCodd/YOLOv11n-face-detection",
                 filename="model.pt",
@@ -124,8 +122,19 @@ class FaceDetector:
 
         img_h, img_w = img.shape[:2]
 
-        # Run YOLOv11n
-        results = self.model.predict(image_path, conf=self._confidence, verbose=False)
+        # Run YOLOv11n — pass device explicitly so MPS is used when available
+        from content_engine.utils.mps_safe import MPS_DEVICE, empty_cache
+        try:
+            results = self.model.predict(
+                image_path, conf=self._confidence, verbose=False, device=MPS_DEVICE
+            )
+        except Exception:
+            # MPS failure — fall back to CPU silently
+            results = self.model.predict(
+                image_path, conf=self._confidence, verbose=False, device="cpu"
+            )
+        finally:
+            empty_cache()
 
         if results[0].boxes is None or len(results[0].boxes) == 0:
             return {

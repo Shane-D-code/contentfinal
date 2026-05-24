@@ -2,7 +2,7 @@
  * SocialShareButtons — platform-specific share/copy actions.
  */
 import { useState } from 'react'
-import { Copy, Check, ExternalLink } from 'lucide-react'
+import { Copy, Check, ExternalLink, Info } from 'lucide-react'
 
 interface Props {
   platform: 'linkedin' | 'instagram' | 'stories' | 'reel'
@@ -43,7 +43,7 @@ export default function SocialShareButtons({ platform, caption }: Props) {
 
       {(platform === 'instagram' || platform === 'stories' || platform === 'reel') && (
         <div style={{ fontSize: 11, color: 'var(--t3)', display: 'flex', alignItems: 'center', gap: 4 }}>
-          ℹ️ Instagram requires the mobile app to post
+          <Info size={13} /> Instagram requires the mobile app to post
         </div>
       )}
     </div>

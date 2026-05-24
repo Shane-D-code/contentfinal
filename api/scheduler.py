@@ -1,9 +1,10 @@
 """
-api/scheduler.py — In-memory async job store using APScheduler.
+api/scheduler.py — In-memory async job store using APScheduler with Redis fallback.
 
 This is the fallback when Celery + Redis are not available.
 Jobs run in a background thread pool managed by APScheduler.
-Results are stored in memory (lost on restart — acceptable for dev/demo).
+Results are stored in memory (lost on restart — acceptable for dev/demo),
+but if Redis is available, we use it for shared job data across backends.
 
 For production with persistence, the Celery path in api/tasks.py is preferred.
 The API automatically uses whichever is available:
@@ -16,17 +17,54 @@ Job lifecycle:
 
 import uuid
 import traceback
+import json
 from datetime import datetime
 from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from api.logger import get_logger
+from config import settings
 
 logger = get_logger(__name__)
 
+# ── Redis helpers ──────────────────────────────────────────────────────────────
+def _get_redis_client():
+    """Get Redis client if available, else None."""
+    try:
+        import redis
+        r = redis.from_url(settings.redis_url, socket_connect_timeout=1)
+        r.ping()
+        return r
+    except Exception:
+        return None
+
+def _redis_job_key(job_id: str) -> str:
+    return f"job:{job_id}"
+
+def _save_job_to_redis(job_id: str, job_data: Dict[str, Any]) -> None:
+    """Save job data to Redis with 24h TTL."""
+    r = _get_redis_client()
+    if r:
+        try:
+            r.setex(_redis_job_key(job_id), 86400, json.dumps(job_data))
+        except Exception as e:
+            logger.warning("redis_save_failed", job_id=job_id, error=str(e))
+
+def _load_job_from_redis(job_id: str) -> Optional[Dict[str, Any]]:
+    """Load job data from Redis if available."""
+    r = _get_redis_client()
+    if r:
+        try:
+            data = r.get(_redis_job_key(job_id))
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.warning("redis_load_failed", job_id=job_id, error=str(e))
+    return None
+
 # ── In-memory store ───────────────────────────────────────────────────────────
-# {job_id: {status, type, result, error, created_at, updated_at, progress}}
+# {job_id: {status, type, result, error, created_at, updated_at, progress, assets, event_name, event_description}}
 _jobs: Dict[str, Dict[str, Any]] = {}
 
 # Thread pool — concurrency=1 keeps ML memory usage bounded
@@ -36,7 +74,6 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ce_job")
 _scheduler = BackgroundScheduler(daemon=True)
 _scheduler.start()
 
-
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def submit_pipeline_job(asset_paths: list, event_description: str = "Event") -> str:
@@ -44,7 +81,7 @@ def submit_pipeline_job(asset_paths: list, event_description: str = "Event") -> 
     Submit an ML selection pipeline job.
     Returns job_id immediately; job runs in background thread.
     """
-    job_id = _new_job("pipeline")
+    job_id = _new_job("pipeline", asset_paths, event_description=event_description)
     _executor.submit(_run_pipeline, job_id, asset_paths, event_description)
     logger.info("job_submitted", job_id=job_id, type="pipeline", assets=len(asset_paths))
     return job_id
@@ -59,15 +96,36 @@ def submit_generate_job(
     Submit a full content generation job.
     Returns job_id immediately; job runs in background thread.
     """
-    job_id = _new_job("generate")
+    job_id = _new_job("generate", asset_paths, event_name=event_name, event_description=event_description)
     _executor.submit(_run_generate, job_id, asset_paths, event_name, event_description)
     logger.info("job_submitted", job_id=job_id, type="generate", assets=len(asset_paths))
     return job_id
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
-    """Return job dict or None if not found."""
-    return _jobs.get(job_id)
+    """Return job dict from memory first, then Redis if available."""
+    if job_id in _jobs:
+        return _jobs[job_id]
+    return _load_job_from_redis(job_id)
+
+
+def set_job_data(job_id: str, **kwargs) -> None:
+    """Set or update job data (including assets, event_name, etc.) in both memory and Redis."""
+    if job_id not in _jobs:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "type": "generate",
+            "status": "pending",
+            "progress": {"step": "queued", "pct": 0},
+            "result": None,
+            "error": None,
+            "assets": [],
+            "event_name": "",
+            "event_description": "",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    _update(job_id, **kwargs)
 
 
 def get_scheduler() -> BackgroundScheduler:
@@ -77,18 +135,35 @@ def get_scheduler() -> BackgroundScheduler:
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _new_job(job_type: str) -> str:
+def _new_job(job_type: str, asset_paths: list = None, event_name: str = "", event_description: str = "") -> str:
     job_id = uuid.uuid4().hex
-    _jobs[job_id] = {
+    from pathlib import Path
+    initial_assets = []
+    if asset_paths:
+        for idx, path in enumerate(asset_paths):
+            initial_assets.append({
+                "id": f"asset-{idx}",
+                "path": path,
+                "filename": Path(path).name,
+                "final_score": 0.0,
+                "scene_concepts": [],
+                "face_count": 0,
+            })
+    job_data = {
         "job_id":     job_id,
         "type":       job_type,
         "status":     "pending",
         "progress":   {"step": "queued", "pct": 0},
         "result":     None,
         "error":      None,
+        "assets":     initial_assets,
+        "event_name": event_name,
+        "event_description": event_description,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
+    _jobs[job_id] = job_data
+    _save_job_to_redis(job_id, job_data)
     return job_id
 
 
@@ -96,6 +171,14 @@ def _update(job_id: str, **kwargs) -> None:
     if job_id in _jobs:
         _jobs[job_id].update(kwargs)
         _jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        _save_job_to_redis(job_id, _jobs[job_id])
+    else:
+        # If only in Redis, update it
+        job_data = _load_job_from_redis(job_id)
+        if job_data:
+            job_data.update(kwargs)
+            job_data["updated_at"] = datetime.utcnow().isoformat()
+            _save_job_to_redis(job_id, job_data)
 
 
 def _run_pipeline(job_id: str, asset_paths: list, event_description: str) -> None:
@@ -107,14 +190,40 @@ def _run_pipeline(job_id: str, asset_paths: list, event_description: str) -> Non
         engine = ContentEngine(event_description=event_description)
 
         _update(job_id, progress={"step": "processing_assets", "pct": 30})
+        
+        # Process ALL assets first to get real metadata
+        all_processed_assets = []
+        for idx, path in enumerate(asset_paths):
+            metadata = engine.process_asset(path)
+            if metadata:
+                all_processed_assets.append({
+                    "id": f"asset-{idx}",
+                    "path": path,
+                    "filename": metadata.path.split("/")[-1],
+                    "final_score": metadata.final_score,
+                    "scene_concepts": metadata.scene_concepts,
+                    "face_count": metadata.face_count,
+                })
+            else:
+                from pathlib import Path
+                all_processed_assets.append({
+                    "id": f"asset-{idx}",
+                    "path": path,
+                    "filename": Path(path).name,
+                    "final_score": 0.0,
+                    "scene_concepts": [],
+                    "face_count": 0,
+                })
+        
+        _update(job_id, assets=all_processed_assets)
+        
         selections = engine.select_assets(asset_paths)
 
         _update(job_id, progress={"step": "serialising", "pct": 90})
 
-        from pathlib import Path
         results = []
         for s in selections:
-            file_name = Path(s.asset.path).name
+            file_name = s.asset.path.split("/")[-1]
             results.append({
                 "filename":         file_name,
                 "file_url":         f"/uploads/{file_name}",
@@ -176,6 +285,33 @@ def _run_generate(
 
         from content_engine.orchestrator import ContentOrchestrator
         from config import settings
+        from content_engine import ContentEngine
+
+        # First get all processed assets
+        engine = ContentEngine(event_description=event_description)
+        all_processed_assets = []
+        for idx, path in enumerate(asset_paths):
+            metadata = engine.process_asset(path)
+            if metadata:
+                all_processed_assets.append({
+                    "id": f"asset-{idx}",
+                    "path": path,
+                    "filename": metadata.path.split("/")[-1],
+                    "final_score": metadata.final_score,
+                    "scene_concepts": metadata.scene_concepts,
+                    "face_count": metadata.face_count,
+                })
+            else:
+                all_processed_assets.append({
+                    "id": f"asset-{idx}",
+                    "path": path,
+                    "filename": Path(path).name,
+                    "final_score": 0.0,
+                    "scene_concepts": [],
+                    "face_count": 0,
+                })
+        
+        _update(job_id, assets=all_processed_assets)
 
         orch = ContentOrchestrator(
             event_name=event_name,
@@ -216,6 +352,8 @@ def _run_generate(
                 "files":      output_files,
                 "captions":   captions,
             },
+            event_name=event_name,
+            event_description=event_description,
         )
         logger.info("job_completed", job_id=job_id, type="generate", files=len(output_files))
 

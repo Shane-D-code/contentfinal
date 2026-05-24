@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, ChevronLeft, ChevronRight, Globe } from 'lucide-react'
+import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, ChevronLeft, ChevronRight, Globe, ThumbsUp, Lightbulb, Repeat2, Film } from 'lucide-react'
 
 // All paths are relative — served through Vite proxy (/output, /uploads → :8000)
 const img = (p: string) => p ?? ''
@@ -46,12 +46,17 @@ export function LinkedInPreview({ images, caption, name }: { images:string[]; ca
       )}
 
       {/* Reactions */}
-      <div style={{ padding:'8px 16px 4px', borderTop:'1px solid #e8e8e8', fontSize:12, color:'#666' }}>
-        👍 ❤️ 💡 <span style={{ marginLeft:4 }}>247 · 38 comments</span>
+      <div style={{ padding:'8px 16px 4px', borderTop:'1px solid #e8e8e8', fontSize:12, color:'#666', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <ThumbsUp size={13} /><Heart size={13} /><Lightbulb size={13} /><span style={{ marginLeft:4 }}>247 · 38 comments</span>
       </div>
       <div style={{ display:'flex', borderTop:'1px solid #e8e8e8' }}>
-        {[['👍','Like'],['💬','Comment'],['🔁','Repost'],['📤','Send']].map(([ic,lb])=>(
-          <button key={lb} style={{ flex:1, padding:'10px 4px', background:'none', border:'none', color:'#666', fontSize:13, fontWeight:500, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:5 }}>{ic} {lb}</button>
+        {[
+          { icon: ThumbsUp, label: 'Like' },
+          { icon: MessageCircle, label: 'Comment' },
+          { icon: Repeat2, label: 'Repost' },
+          { icon: Send, label: 'Send' },
+        ].map(({ icon: ActionIcon, label })=>(
+          <button key={label} style={{ flex:1, padding:'10px 4px', background:'none', border:'none', color:'#666', fontSize:13, fontWeight:500, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:5 }}><ActionIcon size={15} /> {label}</button>
         ))}
       </div>
     </div>
@@ -155,7 +160,7 @@ export function InstagramReel({ videoUrl, caption, name }: { videoUrl?:string; c
       {videoUrl
         ? <video src={videoUrl} controls style={{ width:'100%', height:'100%', objectFit:'cover' }}/>
         : <div style={{ width:'100%', height:'100%', background:'linear-gradient(135deg,#1a1a24,#2a2a3a)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12 }}>
-            <div style={{ fontSize:44 }}>🎬</div>
+            <Film size={44} color="var(--t3)" />
             <span style={{ color:'var(--t3)', fontSize:12 }}>Reel preview</span>
           </div>
       }

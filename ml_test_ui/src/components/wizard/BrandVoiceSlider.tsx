@@ -1,3 +1,5 @@
+import { BriefcaseBusiness, Smile } from 'lucide-react'
+
 interface Props {
   value: number  // 0 = Professional, 100 = Casual
   onChange: (v: number) => void
@@ -10,9 +12,9 @@ export default function BrandVoiceSlider({ value, onChange }: Props) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: 12 }}>
-        <span style={{ color: 'var(--blue)', fontWeight: 600 }}>💼 Professional</span>
+        <span style={{ color: 'var(--blue)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}><BriefcaseBusiness size={14} /> Professional</span>
         <span style={{ color, fontWeight: 700, fontSize: 13 }}>{label}</span>
-        <span style={{ color: 'var(--pink)', fontWeight: 600 }}>😎 Casual</span>
+        <span style={{ color: 'var(--pink)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Smile size={14} /> Casual</span>
       </div>
       <input
         type="range" min={0} max={100} value={value}
@@ -22,10 +24,10 @@ export default function BrandVoiceSlider({ value, onChange }: Props) {
       />
       <p style={{ fontSize: 12, color: 'var(--t3)', marginTop: 8, textAlign: 'center' }}>
         {value < 40
-          ? 'Formal language, no emojis, insight-focused'
+          ? 'Formal language, icon-safe, insight-focused'
           : value < 70
-          ? 'Balanced tone, occasional emojis, engaging'
-          : 'Casual language, emojis welcome, behind-the-scenes energy'}
+          ? 'Balanced tone, concise and engaging'
+          : 'Casual language, behind-the-scenes energy'}
       </p>
     </div>
   )

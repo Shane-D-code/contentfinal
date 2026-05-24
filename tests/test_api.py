@@ -12,8 +12,13 @@ Tests cover:
 
 import pytest
 import json
+import io
+import asyncio
+import types
 from unittest.mock import patch, Mock, AsyncMock
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
+from fastapi import HTTPException
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -68,6 +73,175 @@ def test_upload_rejects_invalid_mime(client: TestClient):
             data={"event_name": "Test"},
         )
     assert response.status_code == 400
+
+
+def test_validate_upload_accepts_octet_stream_video_with_ffprobe_fallback():
+    """octet-stream video should be accepted when extension is allowed and ffprobe validation succeeds."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="C0165.MP4",
+        file=io.BytesIO(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 1024),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_video_file", return_value=True):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_accepts_octet_stream_video_when_signature_matches_and_probe_fails():
+    """octet-stream mp4 should still be accepted via signature fallback when ffprobe/OpenCV checks fail."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="C0165.MP4",
+        file=io.BytesIO(b"\x00\x00\x00\x20ftypmp42" + b"\x00" * 1024),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_video_bytes", return_value=False):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix == ".mp4"
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_accepts_octet_stream_camera_mp4_brand_when_probe_fails():
+    """Camera MP4 variants such as Sony XAVC should pass by extension plus ISO BMFF signature."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="C0165.MP4",
+        file=io.BytesIO(b"\x00\x00\x00\x20ftypXAVC" + b"\x00" * 1024),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_video_bytes", return_value=False):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix == ".mp4"
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_accepts_octet_stream_mts_when_signature_matches():
+    """MTS camera files should be accepted when the transport-stream signature is present."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="camera_clip.MTS",
+        file=io.BytesIO(b"\x47" + b"\x00" * 1024),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_video_bytes", return_value=False):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix == ".mts"
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_rejects_octet_stream_video_when_ffprobe_fails():
+    """octet-stream video should be rejected if ffprobe validation fails."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="C0165.MP4",
+        file=io.BytesIO(b"\x00" * 512),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_video_file", return_value=False):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(validate_upload(upload))
+
+    assert exc.value.status_code == 400
+    assert "unsupported type 'application/octet-stream'" in exc.value.detail
+
+
+def test_validate_upload_accepts_nonstandard_video_mime_when_probe_passes():
+    """Non-allowlisted video/* MIME should be accepted when video probe succeeds."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="clip.wmv",
+        file=io.BytesIO(b"\x00\x00\x01\xba" + b"\x00" * 1024),
+        headers={"content-type": "video/x-ms-wmv"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "video/x-ms-wmv")}):
+        with patch("api.main._is_valid_video_bytes", return_value=True):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix == ".wmv"
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_accepts_octet_stream_image_when_probe_passes():
+    """octet-stream image should be accepted when extension is image-like and decode check passes."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="frame.heic",
+        file=io.BytesIO(b"\x00" * 256),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_image_bytes", return_value=True):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix in (".heic", ".heif")
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_accepts_heic_signature_when_decoder_fails():
+    """HEIC uploads should pass signature fallback even if decoder libraries are unavailable."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="frame.HEIC",
+        file=io.BytesIO(b"\x00\x00\x00\x18ftypheic" + b"\x00" * 512),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_image_bytes", return_value=False):
+            saved_path = asyncio.run(validate_upload(upload))
+
+    assert saved_path.exists()
+    assert saved_path.suffix in (".heic", ".heif")
+    saved_path.unlink(missing_ok=True)
+
+
+def test_validate_upload_rejects_fake_image_with_image_extension():
+    """A disguised non-image file should still be rejected even with image extension."""
+    from api.main import validate_upload
+
+    upload = UploadFile(
+        filename="fake.jpg",
+        file=io.BytesIO(b"not-an-image"),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    with patch.dict("sys.modules", {"magic": types.SimpleNamespace(from_buffer=lambda *_a, **_k: "application/octet-stream")}):
+        with patch("api.main._is_valid_image_bytes", return_value=False):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(validate_upload(upload))
+
+    assert exc.value.status_code == 400
 
 
 # ── Async job submission ──────────────────────────────────────────────────────

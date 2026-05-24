@@ -71,6 +71,13 @@ fi
 source .venv/bin/activate
 ok "Virtual environment active ($(python --version))"
 
+# ── PYTHONPATH ────────────────────────────────────────────────────────────────
+# Ensure content_engine is importable from any working directory
+# (required for Celery workers and scripts run outside the project root)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+ok "PYTHONPATH set to ${SCRIPT_DIR}"
+
 # ── Python dependencies ───────────────────────────────────────────────────────
 log "Checking Python dependencies..."
 if ! python -c "import fastapi, uvicorn, celery, redis" 2>/dev/null; then
@@ -159,6 +166,7 @@ if [ "$START_WORKER" = true ]; then
   celery -A api.worker worker \
     --loglevel="${LOG_LEVEL:-WARNING}" \
     --concurrency="$CONCURRENCY" \
+    --pool=solo \
     --max-tasks-per-child="${CELERY_WORKER_MAX_TASKS_PER_CHILD:-50}" \
     --hostname="worker@%h" \
     --logfile="logs/celery_worker.log" \
@@ -205,6 +213,11 @@ else
     --host "$API_HOST" \
     --port "$API_PORT" \
     --reload \
+    --reload-exclude '.venv' \
+    --reload-exclude 'uploads' \
+    --reload-exclude 'output' \
+    --reload-exclude 'logs' \
+    --reload-exclude 'models' \
     --log-level info \
     2>&1 | tee -a logs/api.log &
 fi

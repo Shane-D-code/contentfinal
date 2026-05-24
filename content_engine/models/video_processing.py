@@ -33,10 +33,9 @@ class VideoProcessor:
     @property
     def clip_model(self):
         if self._clip_model is None:
-            import torch
             from sentence_transformers import SentenceTransformer
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-            self._clip_model = SentenceTransformer("clip-ViT-B-32", device=device)
+            from content_engine.utils.mps_safe import MPS_DEVICE
+            self._clip_model = SentenceTransformer("clip-ViT-B-32", device=MPS_DEVICE)
         return self._clip_model
 
     # ── Scene detection ──────────────────────────────────────────────────────────
@@ -130,10 +129,11 @@ class VideoProcessor:
         ]).mean(axis=0)
 
         import torch
+        from content_engine.utils.mps_safe import empty_cache
         similarity = torch.cosine_similarity(
             torch.tensor(frame_emb), torch.tensor(exciting_embs), dim=0
         ).item()
-
+        empty_cache()
         return float((similarity + 1.0) / 2.0)  # Normalise to 0–1
 
     # ── Highlight extraction ────────────────────────────────────────────────────

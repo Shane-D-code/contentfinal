@@ -87,11 +87,11 @@ class QualityAssessor:
     @property
     def clip_model(self):
         if self._clip_model is None:
-            import torch
             from sentence_transformers import SentenceTransformer
-            self._clip_device = "mps" if torch.backends.mps.is_available() else "cpu"
+            from content_engine.utils.mps_safe import MPS_DEVICE
+            self._clip_device = MPS_DEVICE
             self._clip_model = SentenceTransformer("clip-ViT-B-32", device=self._clip_device)
-            self._high_emb = None  # Will be computed on first assess
+            self._high_emb = None
         return self._clip_model
 
     # ── Blur detection ──────────────────────────────────────────────────────────
@@ -162,6 +162,9 @@ class QualityAssessor:
         low_sim = torch.cosine_similarity(
             torch.tensor(image_emb), torch.tensor(self._low_emb), dim=0
         ).item()
+
+        from content_engine.utils.mps_safe import empty_cache
+        empty_cache()
 
         # Map to 0–1: (high_sim - low_sim + 1) / 2
         return float(np.clip((high_sim - low_sim + 1.0) / 2.0, 0.0, 1.0))

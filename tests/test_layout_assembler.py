@@ -1,12 +1,20 @@
 """Tests for LayoutAssembler — crop logic, grid selection, story burn-in."""
 import pytest
-from PIL import Image
+from unittest.mock import MagicMock, Mock, patch
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def assembler():
-    from content_engine.layout_assembler import LayoutAssembler
-    return LayoutAssembler()
+    with patch("content_engine.layout_assembler.hf_hub_download", return_value="/tmp/fake-model.pt"), \
+         patch("content_engine.layout_assembler.YOLO") as mock_yolo:
+        model = Mock()
+        empty_boxes = MagicMock()
+        empty_boxes.__len__.return_value = 0
+        model.predict.return_value = [Mock(boxes=empty_boxes)]
+        mock_yolo.return_value = model
+
+        from content_engine.layout_assembler import LayoutAssembler
+        yield LayoutAssembler()
 
 
 def test_smart_crop_produces_correct_size(assembler, sharp_image_path):

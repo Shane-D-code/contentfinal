@@ -2,7 +2,7 @@ import { useState, useEffect, lazy, Suspense } from 'react'
 import type React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Zap, AlertCircle, Sun, Moon, BarChart3, Home, FileText } from 'lucide-react'
-import { checkHealth } from './api'
+import { checkHealth, generateCustom } from './api'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import { JobProvider } from './contexts/JobContext'
 import { AnalyticsProvider } from './contexts/AnalyticsContext'
@@ -17,8 +17,9 @@ import { Skeleton } from './components/ui/Skeleton'
 const StudioPage    = lazy(() => import('./pages/StudioPage'))
 const ResultsPage   = lazy(() => import('./pages/ResultsPage'))
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'))
+const AssetSelectionPage = lazy(() => import('./pages/AssetSelectionPage'))
 
-export type View = 'studio' | 'results' | 'analytics'
+export type View = 'studio' | 'asset-selection' | 'results' | 'analytics'
 
 const PageFallback = () => (
   <div style={{ maxWidth: 860, margin: '0 auto', padding: '40px 24px' }}>
@@ -36,6 +37,8 @@ function AppInner() {
   const [result, setResult]   = useState<any>(null)
   const [eventName, setEvent] = useState('')
   const [apiOk, setApiOk]     = useState<boolean | null>(null)
+  const [studioData, setStudioData] = useState<any>(null)
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const { resolvedTheme, setTheme, theme } = useTheme()
   const isMobile = useIsMobile()
 
@@ -53,6 +56,45 @@ function AppInner() {
     setEvent(name)
     setView('results')
     toast.success('Content generated!', `${name} is ready to review`)
+  }
+
+  const handleStudioGenerate = (data: any) => {
+    setStudioData(data)
+    setCurrentJobId(data.jobId)
+    if (data.result?.mode === 'gff') {
+      setResult(data.result)
+      setEvent(data.eventName || data.result?.event || 'Event')
+      setView('results')
+      toast.success('Brand content generated!', `${data.eventName || data.result?.event || 'Event'} is ready to review`)
+      return
+    }
+    setView('asset-selection')
+  }
+
+  const handleAssetSelectionContinue = async (selectedAssetIds: string[], layouts: any) => {
+    // Try backend first, but fall back to original behavior if it fails
+    try {
+      if (currentJobId) {
+        const result = await generateCustom({
+          job_id: currentJobId,
+          asset_ids: selectedAssetIds,
+          linkedin_layout: layouts.linkedin,
+          story_layout: layouts.story,
+          reel_layout: layouts.reel
+        })
+        setResult(result)
+        setEvent(result.event || 'Event')
+        setView('results')
+        toast.success('Content generated!', `${result.event} is ready to review`)
+        return
+      }
+    } catch (e) {
+      // Ignore backend errors and use original behavior instead
+      console.log('Backend not available, using original behavior')
+    }
+
+    // Original fallback behavior (preserves existing functionality)
+    handleResult(studioData?.result || {}, studioData?.eventName || 'Event')
   }
 
   // Keyboard shortcuts
@@ -195,7 +237,24 @@ function AppInner() {
                 exit={{ opacity: 0, y: -16 }}
                 transition={{ duration: 0.25, ease: 'easeOut' }}
               >
-                <StudioPage onResult={handleResult} />
+                <StudioPage onResult={handleStudioGenerate} />
+              </motion.div>
+            )}
+            {view === 'asset-selection' && (
+              <motion.div
+                key="asset-selection"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                transition={{ duration: 0.25, ease: 'easeOut' }}
+              >
+                <AssetSelectionPage 
+                  onContinue={handleAssetSelectionContinue} 
+                  onBack={() => setView('studio')} 
+                  eventName={studioData?.eventName || ''} 
+                  jobId={currentJobId ?? undefined}
+                  files={studioData?.files || []} 
+                />
               </motion.div>
             )}
             {view === 'results' && result && (

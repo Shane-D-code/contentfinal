@@ -13,8 +13,14 @@ endpoints, so the frontend doesn't need to know which backend is active.
 import uuid
 import shutil
 import time
+import subprocess
+import tempfile
+import mimetypes
+import io
+import json
+import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +38,14 @@ setup_logging(
 )
 
 logger = get_logger(__name__)
+
+# Preview cache for layout previews (size-limited to prevent memory bloat)
+_preview_cache = {}
+_MAX_CACHE_SIZE = 50
+
+
+def _safe_id(value: str) -> str:
+    return re.sub(r"[^\w\-]", "_", value).strip("_")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -154,11 +168,236 @@ def get_video_processor():
 
 # ── File validation ───────────────────────────────────────────────────────────
 
+_VIDEO_EXTENSION_MIME_MAP = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".f4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".qt": "video/quicktime",
+    ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".wmv": "video/x-ms-wmv",
+    ".flv": "video/x-flv",
+    ".mpg": "video/mpeg",
+    ".mpeg": "video/mpeg",
+    ".mpe": "video/mpeg",
+    ".m2v": "video/mpeg",
+    ".m2ts": "video/mp2t",
+    ".mts": "video/mp2t",
+    ".ts": "video/mp2t",
+    ".3gp": "video/3gpp",
+    ".3g2": "video/3gpp2",
+    ".ogv": "video/ogg",
+    ".asf": "video/x-ms-asf",
+    ".divx": "video/x-msvideo",
+    ".dv": "video/dv",
+    ".vob": "video/mpeg",
+}
+
+_ISO_BMFF_VIDEO_BRANDS = {
+    b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"dash", b"qt  ",
+    b"m4v ", b"3gp4", b"3gp5", b"3g2a", b"3g2b",
+}
+_ISO_BMFF_IMAGE_BRANDS = {
+    b"heic", b"heix", b"hevc", b"hevx", b"heif", b"mif1", b"msf1",
+    b"avif", b"avis",
+}
+
+
+def _is_valid_video_file(file_path: Path) -> bool:
+    """
+    Validate video container with ffprobe (preferred) and OpenCV fallback.
+    Returns True when a playable video stream is detected.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0 and "video" in (result.stdout or "").lower():
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # Some containers don't report stream metadata cleanly; duration probe is a
+    # secondary ffprobe check.
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(file_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        duration_raw = (result.stdout or "").strip()
+        if result.returncode == 0 and duration_raw and duration_raw.lower() != "n/a":
+            return float(duration_raw) > 0
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # Final fallback: OpenCV decode sanity check.
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(file_path))
+        if not cap.isOpened():
+            cap.release()
+            return False
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames > 0:
+            cap.release()
+            return True
+
+        ok, _ = cap.read()
+        cap.release()
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def _is_valid_video_bytes(data: bytes, suffix: str) -> bool:
+    """
+    Write bytes to a temp file and run video validation.
+    """
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".mp4") as tmp:
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
+        return _is_valid_video_file(tmp_path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _is_valid_image_bytes(data: bytes) -> bool:
+    """
+    Validate image bytes with Pillow and OpenCV fallback.
+    """
+    try:
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(data)) as img:
+            img.verify()
+        return True
+    except Exception:
+        pass
+
+    try:
+        import cv2
+        import numpy as np
+
+        decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        return decoded is not None
+    except Exception:
+        return False
+
+def _is_likely_video_signature(data: bytes, ext: str) -> bool:
+    """
+    Lightweight container signature checks for common video formats.
+    Useful when ffprobe/OpenCV can't parse codec/container variants.
+    """
+    head = data[:64]
+    ext = (ext or "").lower()
+
+    # ISO BMFF family (mp4/mov/m4v/3gp/3g2)
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        major_brand = head[8:12].lower()
+        if major_brand in _ISO_BMFF_VIDEO_BRANDS:
+            return True
+        if ext in {".mp4", ".mov", ".m4v", ".3gp", ".3g2"}:
+            return True
+
+    # AVI
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return True
+
+    # Matroska / WebM
+    if head.startswith(b"\x1A\x45\xDF\xA3"):
+        return True
+
+    # FLV
+    if head.startswith(b"FLV"):
+        return True
+
+    # Ogg container (used by .ogv)
+    if head.startswith(b"OggS"):
+        return True
+
+    # MPEG Program Stream / Sequence header
+    if head.startswith(b"\x00\x00\x01\xBA") or head.startswith(b"\x00\x00\x01\xB3"):
+        return True
+
+    # MPEG-TS packets usually start with sync byte 0x47
+    if ext in {".ts", ".m2ts", ".mts"} and head[:1] == b"\x47":
+        return True
+
+    return False
+
+
+def _is_likely_image_signature(data: bytes, ext: str) -> bool:
+    """
+    Lightweight signature checks for common image formats.
+    Useful when Pillow/OpenCV plugins are missing (e.g. HEIC/HEIF).
+    """
+    head = data[:64]
+    ext = (ext or "").lower()
+
+    if head.startswith(b"\xFF\xD8\xFF"):  # JPEG/JFIF/EXIF
+        return True
+    if head.startswith(b"\x89PNG\r\n\x1A\n"):  # PNG
+        return True
+    if head.startswith((b"GIF87a", b"GIF89a")):  # GIF
+        return True
+    if head.startswith(b"BM"):  # BMP
+        return True
+    if head.startswith((b"II*\x00", b"MM\x00*")):  # TIFF (little/big endian)
+        return True
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return True
+
+    # ISO BMFF image family (HEIC/HEIF/AVIF)
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        major_brand = head[8:12].lower()
+        if major_brand in _ISO_BMFF_IMAGE_BRANDS:
+            return True
+        if ext in {".heic", ".heif"}:
+            return True
+
+    return False
+
+
+def _guess_mime_from_extension(ext: str, fallback: str) -> str:
+    guessed = mimetypes.guess_type(f"upload{ext}")[0]
+    return guessed or fallback
+
 async def validate_upload(file: UploadFile) -> Path:
     """
-    Validate MIME type (via python-magic, not spoofable Content-Type header)
-    and file size, then save to uploads/ with a UUID filename.
-    Raises HTTP 413 for oversized files, HTTP 400 for invalid MIME types.
+    Validate file size, detect MIME type for logging, then save to uploads/
+    with a UUID filename.
+    Raises HTTP 413 for oversized files.
     """
     data = await file.read()
 
@@ -172,24 +411,95 @@ async def validate_upload(file: UploadFile) -> Path:
             ),
         )
 
+    ext = Path(file.filename or "upload").suffix.lower() or ".bin"
+    allowed_mimes = settings.allowed_mime_types
+    is_video_ext = ext in settings.allowed_video_extensions
+    is_image_ext = ext in settings.allowed_image_extensions
+
     # Real MIME type from file bytes
     try:
         import magic as libmagic
         detected_mime = libmagic.from_buffer(data[:2048], mime=True)
     except Exception:
         detected_mime = file.content_type or "application/octet-stream"
+    declared_mime = file.content_type or "application/octet-stream"
 
-    if detected_mime not in settings.allowed_mime_types:
+    resolved_kind: str | None = None
+    resolved_mime: str | None = None
+
+    # Fast-path: explicitly allowed MIME list.
+    if detected_mime in allowed_mimes:
+        resolved_mime = detected_mime
+        resolved_kind = "video" if detected_mime.startswith("video/") else "image"
+    elif detected_mime in {"application/x-matroska", "audio/ogg"} and is_video_ext:
+        resolved_mime = _VIDEO_EXTENSION_MIME_MAP.get(ext, "video/mp4")
+        resolved_kind = "video"
+
+    # Fallback path: handle non-standard or octet-stream media types.
+    if resolved_mime is None:
+        video_signature_ok = _is_likely_video_signature(data, ext)
+        image_signature_ok = _is_likely_image_signature(data, ext)
+        looks_like_video = (
+            detected_mime.startswith("video/")
+            or declared_mime.startswith("video/")
+            or is_video_ext
+            or video_signature_ok
+        )
+        looks_like_image = (
+            detected_mime.startswith("image/")
+            or declared_mime.startswith("image/")
+            or is_image_ext
+            or image_signature_ok
+        )
+        video_probe_ok = _is_valid_video_bytes(data, ext if ext != ".bin" else ".mp4")
+        image_probe_ok = _is_valid_image_bytes(data)
+        if looks_like_video and (video_probe_ok or video_signature_ok):
+            resolved_kind = "video"
+            resolved_mime = _VIDEO_EXTENSION_MIME_MAP.get(
+                ext,
+                _guess_mime_from_extension(
+                    ext,
+                    declared_mime if declared_mime.startswith("video/") else "video/mp4",
+                ),
+            )
+        elif looks_like_image and (image_probe_ok or image_signature_ok):
+            resolved_kind = "image"
+            resolved_mime = _guess_mime_from_extension(
+                ext,
+                declared_mime if declared_mime.startswith("image/") else "image/jpeg",
+            )
+
+    if resolved_mime is None or resolved_kind is None:
+        allowed = ", ".join(allowed_mimes)
+        allowed_exts = ", ".join(settings.allowed_upload_extensions)
         raise HTTPException(
             status_code=400,
             detail=(
                 f"File '{file.filename}' has unsupported type '{detected_mime}'. "
-                f"Allowed: {', '.join(settings.allowed_mime_types)}"
+                f"Allowed MIME types: {allowed}. Allowed extensions: {allowed_exts}"
             ),
         )
 
-    ext  = Path(file.filename or "upload").suffix.lower() or ".bin"
-    dest = settings.upload_dir / f"{uuid.uuid4().hex}{ext}"
+    if detected_mime not in allowed_mimes:
+        logger.info(
+            "upload_media_fallback_accepted",
+            filename=file.filename,
+            extension=ext,
+            detected_mime=detected_mime,
+            declared_mime=declared_mime,
+            resolved_mime=resolved_mime,
+            resolved_kind=resolved_kind,
+        )
+
+    # Normalise extension so downstream routing remains consistent.
+    saved_ext = ext
+    if saved_ext == ".bin":
+        if resolved_kind == "video":
+            saved_ext = mimetypes.guess_extension(resolved_mime) or ".mp4"
+        else:
+            saved_ext = mimetypes.guess_extension(resolved_mime) or ".jpg"
+
+    dest = settings.upload_dir / f"{uuid.uuid4().hex}{saved_ext}"
     dest.write_bytes(data)
 
     logger.info(
@@ -197,7 +507,7 @@ async def validate_upload(file: UploadFile) -> Path:
         filename=file.filename,
         dest=dest.name,
         size_kb=len(data) // 1024,
-        mime=detected_mime,
+        mime=resolved_mime,
     )
     return dest
 
@@ -357,23 +667,12 @@ async def run_pipeline_async(
 ):
     """
     Submit pipeline job. Returns job_id immediately (<500ms).
-    Uses Celery if Redis is available, otherwise APScheduler in-process.
+    Uses APScheduler in-process by default (more stable for ML workloads).
     Poll /api/jobs/{job_id}/status for progress.
     """
     paths = [str(p) for p in await validate_uploads(files)]
 
-    # Try Celery first
-    try:
-        import redis as redis_lib
-        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
-        from api.tasks import run_pipeline_task
-        task = run_pipeline_task.delay(paths, event_description)
-        logger.info("job_submitted", backend="celery", job_id=task.id)
-        return {"job_id": task.id, "status": "queued", "backend": "celery"}
-    except Exception:
-        pass
-
-    # Fallback: APScheduler in-memory
+    # Use APScheduler in-memory by default
     from api.scheduler import submit_pipeline_job
     job_id = submit_pipeline_job(paths, event_description)
     return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
@@ -387,25 +686,168 @@ async def run_generate_async(
 ):
     """
     Submit full generation job. Returns job_id immediately (<500ms).
-    Uses Celery if Redis is available, otherwise APScheduler in-process.
+    Uses APScheduler in-process by default (more stable for ML workloads).
     """
     paths = [str(p) for p in await validate_uploads(files)]
 
-    # Try Celery first
-    try:
-        import redis as redis_lib
-        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
-        from api.tasks import run_generate_task
-        task = run_generate_task.delay(paths, event_name, event_description)
-        logger.info("job_submitted", backend="celery", job_id=task.id)
-        return {"job_id": task.id, "status": "queued", "backend": "celery"}
-    except Exception:
-        pass
-
-    # Fallback: APScheduler in-memory
+    # Use APScheduler in-memory by default
     from api.scheduler import submit_generate_job
     job_id = submit_generate_job(paths, event_name, event_description)
     return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
+
+
+@app.post("/api/generate/fast")
+async def run_generate_fast(
+    files: List[UploadFile] = File(...),
+    render_files: Optional[List[UploadFile]] = File(None),
+    event_name: str = Form("Event"),
+    event_description: str = Form("Event"),
+    mode: str = Form("standard"),
+    brands: Optional[str] = Form(None),
+    selected_brand: Optional[str] = Form(None),
+    render_brand_ids: Optional[str] = Form(None),
+    generate_reel: bool = Form(False),
+):
+    """
+    Submit an optimized generation job for the unified Studio page.
+
+    standard mode: ML selects the strongest assets, caps to top 10, then writes
+    normal ResultsPage-compatible outputs.
+
+    gff mode: runs brand segregation and brand-specific GFF outputs.
+    """
+    mode = (mode or "standard").lower()
+
+    paths: List[str]
+    source_root: Optional[Path] = None
+    parsed_brands: List[str] = []
+
+    if mode == "gff":
+        parsed_brands = json.loads(brands or "[]")
+        if not isinstance(parsed_brands, list):
+            raise HTTPException(400, "brands must be a JSON list")
+        parsed_brands = [str(b).strip() for b in parsed_brands if str(b).strip()]
+        if len(parsed_brands) != 4:
+            raise HTTPException(400, "GFF mode requires exactly 4 brand names")
+        if not selected_brand:
+            raise HTTPException(400, "GFF mode requires selected_brand")
+
+        source_root = settings.upload_dir / f"gff_{uuid.uuid4().hex}"
+        source_root.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for file in files:
+            filename = (file.filename or "upload").strip().replace("\\", "/")
+            ext = Path(filename).suffix.lower()
+            if ext not in settings.allowed_upload_extensions:
+                raise HTTPException(
+                    400,
+                    (
+                        f"File '{file.filename}' has unsupported extension '{ext or '(none)'}'. "
+                        f"Allowed extensions: {', '.join(settings.allowed_upload_extensions)}"
+                    ),
+                )
+            data = await file.read()
+            if len(data) > settings.max_file_size_bytes:
+                raise HTTPException(
+                    413,
+                    (
+                        f"File '{file.filename}' is {len(data) // (1024 * 1024)}MB. "
+                        f"Maximum allowed: {settings.max_file_size_mb}MB."
+                    ),
+                )
+            rel = Path(filename)
+            safe_parts = [part for part in rel.parts if part not in ("", ".", "..")]
+            if not safe_parts:
+                safe_parts = [f"{uuid.uuid4().hex}{ext}"]
+            dest = source_root.joinpath(*safe_parts)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            paths.append(str(dest))
+
+        if render_files:
+            try:
+                render_ids = json.loads(render_brand_ids or "[]")
+            except Exception as e:
+                raise HTTPException(400, f"Invalid render_brand_ids: {e}") from e
+            if not isinstance(render_ids, list) or len(render_ids) != len(render_files):
+                raise HTTPException(400, "render_brand_ids must match render_files")
+
+            render_counts = {_safe_id(name): 0 for name in parsed_brands}
+            for idx, render in enumerate(render_files):
+                brand_id = _safe_id(str(render_ids[idx]).strip())
+                if brand_id not in render_counts:
+                    raise HTTPException(400, f"Render file references unknown brand '{render_ids[idx]}'")
+
+                ext = Path(render.filename or "render").suffix.lower()
+                if ext not in settings.allowed_image_extensions:
+                    raise HTTPException(
+                        400,
+                        f"Render file '{render.filename}' must be an image. Allowed: {', '.join(settings.allowed_image_extensions)}",
+                    )
+                data = await render.read()
+                if len(data) > settings.max_file_size_bytes:
+                    raise HTTPException(
+                        413,
+                        (
+                            f"Render file '{render.filename}' is {len(data) // (1024 * 1024)}MB. "
+                            f"Maximum allowed: {settings.max_file_size_mb}MB."
+                        ),
+                    )
+                render_counts[brand_id] += 1
+                safe_name = Path(render.filename or f"render_{render_counts[brand_id]}{ext}").name
+                dest = source_root / "render_images" / brand_id / f"{render_counts[brand_id]}_{safe_name}"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+
+            missing_renders = [name for name in parsed_brands if render_counts.get(_safe_id(name), 0) == 0]
+            if missing_renders:
+                raise HTTPException(400, f"Missing render images for: {', '.join(missing_renders)}")
+    else:
+        paths = [str(p) for p in await validate_uploads(files)]
+
+    try:
+        import redis as redis_lib
+        redis_lib.from_url(settings.redis_url, socket_connect_timeout=1).ping()
+
+        if mode == "gff":
+            from api.tasks import run_gff_generate_task
+            task = run_gff_generate_task.delay(
+                paths,
+                event_name,
+                parsed_brands,
+                selected_brand,
+                {
+                    "similarity_threshold": 0.60,
+                    "use_llm": False,
+                    "source_root": str(source_root) if source_root else "",
+                },
+            )
+        else:
+            from api.tasks import run_generate_fast_task
+            task = run_generate_fast_task.delay(
+                paths,
+                event_name,
+                event_description,
+                {
+                    "mode": "standard",
+                    "generate_reel": generate_reel,
+                    "generate_linkedin": True,
+                },
+            )
+
+        logger.info("job_submitted", backend="celery", job_id=task.id, mode=mode)
+        return {"job_id": task.id, "status": "queued", "backend": "celery"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if mode == "standard":
+            from api.scheduler import submit_generate_job
+            job_id = submit_generate_job(paths, event_name, event_description)
+            return {"job_id": job_id, "status": "pending", "backend": "apscheduler"}
+        if source_root is not None:
+            shutil.rmtree(source_root, ignore_errors=True)
+        raise HTTPException(status_code=503, detail=f"Fast {mode} generation requires Celery/Redis: {e}")
 
 
 # ── Job status & result ───────────────────────────────────────────────────────
@@ -478,6 +920,38 @@ async def job_result(job_id: str):
 
 # ── WebSocket — real-time job updates ─────────────────────────────────────────
 
+@app.get("/api/ml/status")
+async def get_ml_status():
+    """Check if ML models are loaded and working"""
+    status = {
+        'models_loaded': False,
+        'quality_assessor': False,
+        'face_detector': False,
+        'content_understander': False,
+        'errors': []
+    }
+
+    try:
+        from content_engine.models.quality import QualityAssessor
+        qa = QualityAssessor()
+        status['quality_assessor'] = True
+
+        from content_engine.models.face_detection import FaceDetector
+        fd = FaceDetector()
+        status['face_detector'] = True
+
+        from content_engine.models.content_understanding import ContentUnderstander
+        cu = ContentUnderstander()
+        status['content_understander'] = True
+
+        status['models_loaded'] = True
+
+    except Exception as e:
+        status['errors'].append(str(e))
+
+    return status
+
+
 @app.websocket("/ws/jobs/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str):
     """
@@ -505,6 +979,511 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         except Exception:
             pass
 
+
+# ── Asset categorization & generation from selected assets ────────────────────
+
+@app.get("/api/assets/enhanced/{job_id}")
+async def get_enhanced_assets(
+    job_id: str,
+    top_n_overall: int = 10,
+    top_n_per_category: int = 3
+):
+    """Returns deduplicated top assets + per-category with layout metadata"""
+    from pathlib import Path
+    from PIL import Image
+    import imagehash
+
+    from api.scheduler import get_job
+    job_data = get_job(job_id)
+    if not job_data:
+        try:
+            from celery.result import AsyncResult
+            from api.worker import celery_app
+            result = AsyncResult(job_id, app=celery_app)
+            if result.ready():
+                job_data = {"status": "completed", "result": result.result, "assets": []}
+            else:
+                raise HTTPException(400, "Job not completed yet")
+        except Exception as e:
+            raise HTTPException(404, "Job not found") from e
+
+    all_assets = list(job_data.get('assets') or [])
+
+    has_real_scores = any(a.get('final_score', 0) > 0.0 and a.get('final_score', 0) != 0.7 for a in all_assets[:5])
+    if not has_real_scores:
+        return {
+            'job_id': job_id,
+            'top_overall': [],
+            'per_category': {},
+            'stats': {
+                'total': len(all_assets),
+                'unique': 0,
+                'deduped': 0,
+                'duplicates_removed': 0,
+                'pending_processing': True
+            }
+        }
+
+    all_assets.sort(key=lambda x: x.get('final_score', 0), reverse=True)
+
+    def get_image_hash(path):
+        try:
+            img = Image.open(path)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img = img.resize((128, 128))
+            return str(imagehash.phash(img, hash_size=8))
+        except Exception:
+            return None
+
+    unique_assets = []
+    seen_hashes = set()
+    duplicate_count = 0
+
+    for asset in all_assets:
+        asset_path = asset.get('path')
+        if not asset_path:
+            continue
+
+        asset_hash = get_image_hash(asset_path)
+        if asset_hash:
+            hash_prefix = asset_hash[:8]
+            if hash_prefix not in seen_hashes:
+                seen_hashes.add(hash_prefix)
+                unique_assets.append(asset)
+            else:
+                duplicate_count += 1
+        else:
+            unique_assets.append(asset)
+
+    top_overall = []
+    for asset in unique_assets[:top_n_overall]:
+        top_overall.append({
+            'id': asset.get('id', ''),
+            'url': f"/uploads/{Path(asset.get('path', '')).name}",
+            'score': asset.get('final_score', 0),
+            'faces': asset.get('face_count', 0),
+            'concepts': asset.get('scene_concepts', [])[:3]
+        })
+
+    category_keywords = {
+        'stage': {'keywords': ['stage', 'presentation', 'podium', 'speaker', 'keynote', 'talk', 'lecture', 'platform'], 'icon': '🎤'},
+        'booth': {'keywords': ['booth', 'exhibit', 'display', 'stand', 'kiosk', 'table', 'setup', 'counter'], 'icon': '🏪'},
+        'crowd': {'keywords': ['crowd', 'audience', 'people', 'attendees', 'mass', 'gathering', 'spectators', 'viewers'], 'icon': '👥'},
+        'speakers': {'keywords': ['speaker', 'presenter', 'host', 'moderator', 'panel', 'lecturer', 'guest'], 'icon': '🎙️'},
+        'networking': {'keywords': ['networking', 'conversation', 'handshake', 'meeting', 'chat', 'discussion', 'interaction'], 'icon': '🤝'},
+        'awards': {'keywords': ['award', 'trophy', 'winner', 'prize', 'ceremony', 'medal', 'recognition'], 'icon': '🏆'},
+    }
+
+    per_category = {}
+    for cat_id, cat_info in category_keywords.items():
+        cat_assets = []
+        for asset in unique_assets[:30]:
+            concepts = ' '.join(asset.get('scene_concepts', [])).lower()
+            if any(kw in concepts for kw in cat_info['keywords']):
+                cat_assets.append({
+                    'id': asset.get('id', ''),
+                    'url': f"/uploads/{Path(asset.get('path', '')).name}",
+                    'score': asset.get('final_score', 0),
+                    'faces': asset.get('face_count', 0),
+                    'concepts': asset.get('scene_concepts', [])[:3]
+                })
+        cat_assets.sort(key=lambda x: x['score'], reverse=True)
+        per_category[cat_id] = {
+            'name': cat_id.capitalize(),
+            'icon': cat_info['icon'],
+            'color': '#e8f5e9' if cat_id == 'booth' else '#e3f2fd',
+            'assets': cat_assets[:top_n_per_category]
+        }
+
+    return {
+        'job_id': job_id,
+        'top_overall': top_overall,
+        'per_category': per_category,
+        'stats': {
+            'total': len(all_assets),
+            'unique': len(unique_assets),
+            'deduped': duplicate_count,
+            'duplicates_removed': duplicate_count,
+            'has_real_scores': has_real_scores
+        }
+    }
+
+@app.get("/api/assets/categorized/{job_id}")
+async def get_categorized_assets(job_id: str):
+    """Get AI-categorized assets from completed job."""
+    from collections import defaultdict
+    from pathlib import Path
+
+    from api.scheduler import get_job
+    job_data = get_job(job_id)
+    if not job_data:
+        try:
+            from celery.result import AsyncResult
+            from api.worker import celery_app
+            result = AsyncResult(job_id, app=celery_app)
+            if result.ready():
+                job_data = {"status": "completed", "result": result.result, "assets": []}
+            else:
+                raise HTTPException(400, "Job not completed yet")
+        except Exception as e:
+            raise HTTPException(404, "Job not found") from e
+
+    if job_data.get('status') not in ('completed', 'SUCCESS'):
+        raise HTTPException(400, "Job not completed yet")
+
+    assets = list(job_data.get('assets') or [])
+
+    # Check if assets have real scores
+    has_real_scores = any(a.get('final_score', 0) > 0.0 and a.get('final_score', 0) != 0.7 for a in assets[:5])
+    if not has_real_scores:
+        return {
+            'job_id': job_id,
+            'categories': {},
+            'category_counts': {},
+            'top_assets': [],
+            'total_assets': len(assets),
+            'pending_processing': True
+        }
+
+    # Define category keywords for scene matching (expanded for better matching)
+    category_keywords = {
+        'stage': ['stage', 'presentation', 'podium', 'speaker', 'keynote', 'talk', 'lecture', 'platform'],
+        'booth': ['booth', 'exhibit', 'display', 'stand', 'kiosk', 'table', 'setup', 'counter'],
+        'crowd': ['crowd', 'audience', 'people', 'attendees', 'mass', 'gathering', 'spectators', 'viewers'],
+        'speakers': ['speaker', 'presenter', 'host', 'moderator', 'panel', 'lecturer', 'guest'],
+        'networking': ['networking', 'conversation', 'group', 'meeting', 'handshake', 'chat', 'discussion', 'interaction'],
+        'awards': ['award', 'trophy', 'winner', 'prize', 'ceremony', 'medal', 'recognition'],
+        'product': ['product', 'launch', 'demo', 'showcase', 'display']
+    }
+
+    # Categorize each asset
+    categorized = defaultdict(list)
+    top_assets = []
+
+    for asset in assets:
+        asset_score = asset.get('final_score', 0.5)
+        scene_concepts = asset.get('scene_concepts', [])
+        asset_path = asset.get('path', '')
+        asset_id = asset.get('id', '')
+
+        if not asset_path or not asset_id:
+            continue
+
+        # Determine category
+        assigned_category = 'other'
+        concepts_str = ' '.join(scene_concepts).lower()
+        for category, keywords in category_keywords.items():
+            if any(kw in concepts_str for kw in keywords):
+                assigned_category = category
+                break
+
+        asset_info = {
+            'id': asset_id,
+            'url': f"/uploads/{Path(asset_path).name}",
+            'score': asset_score,
+            'face_count': asset.get('face_count', 0),
+            'concepts': scene_concepts[:3],
+            'category': assigned_category
+        }
+
+        categorized[assigned_category].append(asset_info)
+        top_assets.append(asset_info)
+
+    # Sort top assets by score
+    top_assets.sort(key=lambda x: x['score'], reverse=True)
+    top_assets = top_assets[:10]
+
+    # Get category counts
+    category_counts = {cat: len(cat_assets) for cat, cat_assets in categorized.items()}
+
+    return {
+        'job_id': job_id,
+        'categories': dict(categorized),
+        'category_counts': category_counts,
+        'top_assets': top_assets,
+        'total_assets': len(assets)
+    }
+
+
+@app.post("/api/generate/from-selected")
+async def generate_from_selected(request: Request):
+    """Generate content using only user-selected assets."""
+    from content_engine.orchestrator import ContentOrchestrator
+    import tempfile
+    import shutil
+    from datetime import datetime
+    
+    body = await request.json()
+    job_id = body.get('job_id')
+    selected_asset_ids = body.get('selected_asset_ids', [])
+    
+    # Get job data from APScheduler or Redis
+    from api.scheduler import get_job
+    job_data = get_job(job_id)
+    if not job_data:
+        raise HTTPException(404, "Job not found")
+    
+    # Find selected asset paths
+    all_assets = list(job_data.get('assets') or [])
+    selected_paths = []
+    for asset in all_assets:
+        asset_id = asset.get('id')
+        asset_path = asset.get('path')
+        if asset_id and asset_path and asset_id in selected_asset_ids:
+            selected_paths.append(asset_path)
+    
+    if not selected_paths:
+        raise HTTPException(400, "No assets selected")
+    
+    # Create temp directory with selected assets
+    temp_dir = tempfile.mkdtemp()
+    temp_asset_paths = []
+    try:
+        for src_path in selected_paths:
+            src_p = Path(src_path)
+            if src_p.exists():
+                dst_path = Path(temp_dir) / src_p.name
+                shutil.copy(src_p, dst_path)
+                temp_asset_paths.append(str(dst_path))
+        
+        if not temp_asset_paths:
+            raise HTTPException(400, "No valid assets found")
+        
+        # Run orchestrator on selected assets only
+        orchestrator = ContentOrchestrator(
+            event_name=job_data.get('event_name', 'Event'),
+            event_description=job_data.get('event_description', '')
+        )
+        
+        output_dir = orchestrator.run(
+            temp_dir,
+            output_root="output"
+        )
+        
+        # Prepare output payload
+        from config import settings
+        event_slug = output_dir.name
+        output_files = {}
+        captions = {}
+        root = settings.output_dir.resolve()
+        
+        for f in sorted(output_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            try:
+                rel = f.resolve().relative_to(root)
+                web_url = f"/output/{rel.as_posix()}"
+            except Exception:
+                web_url = str(f.resolve())
+            
+            output_files[f.name] = web_url
+            if f.suffix in (".txt", ".md", ".json"):
+                try:
+                    captions[f.stem] = f.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+        
+        return {
+            'job_id': job_id,
+            'output_dir': str(output_dir),
+            'selected_count': len(selected_paths),
+            'status': 'completed',
+            'event': job_data.get('event_name', 'Event'),
+            'files': output_files,
+            'captions': captions
+        }
+    finally:
+        # Cleanup temp dir
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+from pydantic import BaseModel
+
+
+class CustomGenerateRequest(BaseModel):
+    job_id: str
+    asset_ids: list[str]
+    linkedin_layout: str = "hero_right"
+    story_layout: str = "single"
+    reel_layout: str = "standard"
+
+
+@app.post("/api/generate/custom")
+async def generate_custom(request: CustomGenerateRequest):
+    """Generate with selected layout and selected assets"""
+    from content_engine.orchestrator import ContentOrchestrator
+    
+    # Get job data from APScheduler or Redis
+    from api.scheduler import get_job
+    job_data = get_job(request.job_id)
+    if not job_data:
+        raise HTTPException(404, "Job not found")
+    
+    # Find selected asset paths
+    all_assets = list(job_data.get('assets') or [])
+    selected_paths = []
+    for asset in all_assets:
+        asset_id = asset.get('id')
+        asset_path = asset.get('path')
+        if asset_id and asset_path and asset_id in request.asset_ids:
+            selected_paths.append(asset_path)
+    
+    if not selected_paths:
+        raise HTTPException(400, "No assets selected")
+    
+    # Validate that all selected paths exist
+    valid_paths = []
+    for path in selected_paths:
+        if Path(path).exists():
+            valid_paths.append(path)
+    
+    if not valid_paths:
+        raise HTTPException(400, "No valid assets found (files may have been deleted)")
+    
+    # Run orchestrator on selected assets only with selected layouts
+    orchestrator = ContentOrchestrator(
+        event_name=job_data.get('event_name', 'Event'),
+        event_description=job_data.get('event_description', '')
+    )
+    
+    output_dir = orchestrator.run_with_selected_assets(
+        valid_paths,
+        output_root="output",
+        linkedin_layout=request.linkedin_layout,
+        story_layout=request.story_layout,
+        reel_layout=request.reel_layout
+    )
+    
+    # Prepare output payload
+    from config import settings
+    output_files = {}
+    captions = {}
+    root = settings.output_dir.resolve()
+    
+    for f in sorted(output_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            rel = f.resolve().relative_to(root)
+            web_url = f"/output/{rel.as_posix()}"
+        except Exception:
+            web_url = str(f.resolve())
+        
+        output_files[f.name] = web_url
+        if f.suffix in (".txt", ".md", ".json"):
+            try:
+                captions[f.stem] = f.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+    
+    return {
+        'job_id': request.job_id,
+        'output_dir': str(output_dir),
+        'linkedin_layout': request.linkedin_layout,
+        'story_layout': request.story_layout,
+        'reel_layout': request.reel_layout,
+        'selected_count': len(valid_paths),
+        'status': 'completed',
+        'event': job_data.get('event_name', 'Event'),
+        'files': output_files,
+        'captions': captions
+    }
+
+
+class LayoutPreviewRequest(BaseModel):
+    job_id: str
+    layout_type: str
+    layout_id: str
+    asset_ids: list[str]
+
+
+@app.post("/api/layout/preview")
+async def get_layout_preview(request: LayoutPreviewRequest):
+    """
+    Generate a preview image for selected layout with selected assets (with caching).
+    """
+    from PIL import Image, ImageDraw
+    import base64
+    import hashlib
+
+    # Generate cache key
+    sorted_asset_ids = sorted(request.asset_ids)
+    cache_key = hashlib.md5(
+        f"{request.layout_type}-{request.layout_id}-{'-'.join(sorted_asset_ids)}".encode()
+    ).hexdigest()
+
+    # Check cache first
+    if cache_key in _preview_cache:
+        return {"preview_url": _preview_cache[cache_key]}
+
+    # Get job data from APScheduler or Redis
+    from api.scheduler import get_job
+    job_data = get_job(request.job_id)
+    if not job_data:
+        raise HTTPException(404, "Job not found")
+
+    # Find selected asset paths
+    all_assets = list(job_data.get('assets') or [])
+    selected_paths = []
+    for asset in all_assets:
+        asset_id = asset.get('id')
+        asset_path = asset.get('path')
+        if asset_id and asset_path and asset_id in request.asset_ids:
+            selected_paths.append(asset_path)
+
+    if not selected_paths:
+        return {"preview_url": None, "error": "No assets selected"}
+
+    # Validate paths exist
+    valid_paths = [p for p in selected_paths if Path(p).exists()]
+    if not valid_paths:
+        return {"preview_url": None, "error": "No valid assets found"}
+
+    assembler = None
+    try:
+        from content_engine.layout_assembler import LayoutAssembler
+        assembler = LayoutAssembler()
+
+        preview_img = None
+        if request.layout_type == 'linkedin':
+            preview_img = assembler.create_linkedin_collage(valid_paths[:6], request.layout_id)
+            preview_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+        elif request.layout_type == 'story':
+            # For stories, just take first story preview
+            stories = assembler.create_instagram_stories(valid_paths[:4], ["Preview"] * 4, None, request.layout_id)
+            preview_img = stories[0]
+            preview_img.thumbnail((200, 355), Image.Resampling.LANCZOS)
+        elif request.layout_type == 'reel':
+            # For reel, return a placeholder
+            preview_img = Image.new('RGB', (200, 355), color='#1a1a24')
+            draw = ImageDraw.Draw(preview_img)
+            draw.text((100, 177), "Reel Preview", fill='white', anchor='mm')
+
+        # Convert to base64 with lower quality for speed
+        buffer = io.BytesIO()
+        preview_img.save(buffer, format='JPEG', quality=70)
+        img_base64 = base64.b64encode(buffer.getvalue()).decode()
+        preview_url = f"data:image/jpeg;base64,{img_base64}"
+
+        # Cache the preview
+        if len(_preview_cache) >= _MAX_CACHE_SIZE:
+            # Remove oldest entry if cache is full
+            first_key = next(iter(_preview_cache))
+            del _preview_cache[first_key]
+        _preview_cache[cache_key] = preview_url
+
+        return {"preview_url": preview_url}
+
+    except Exception as e:
+        logger.error(f"Preview generation failed: {e}")
+        return {"preview_url": None, "error": str(e)}
+
+
+# Add GFF router
+from api.gff_routes import router as gff_router
+
+app.include_router(gff_router)
 
 # ── Synchronous generate (testing / small batches) ────────────────────────────
 

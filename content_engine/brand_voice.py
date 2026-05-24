@@ -4,7 +4,7 @@ Defines tone of voice, vocabulary, and language guidelines per the Brand Guideli
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Any, List, Dict
 
 
 @dataclass
@@ -121,7 +121,7 @@ class BrandVoice:
 
         return cleaned
 
-    def validate_copy(self, copy: str) -> Dict[str, any]:
+    def validate_copy(self, copy: str) -> Dict[str, Any]:
         """
         Validate copy against brand voice guidelines.
         Returns validation report.
@@ -130,10 +130,12 @@ class BrandVoice:
         score = 100
 
         # Check for avoided phrases
+        has_avoided_phrase = False
         for phrase in self.language_to_avoid:
             if phrase.lower() in copy.lower():
                 issues.append(f"Avoided phrase detected: '{phrase}'")
-                score -= 10
+                score -= 20
+                has_avoided_phrase = True
 
         # Check for passive voice (basic check)
         passive_indicators = [" was ", " were ", " is being ", " are being "]
@@ -155,7 +157,7 @@ class BrandVoice:
             score -= 3
 
         return {
-            "valid": score >= 70,
+            "valid": score >= 70 and not has_avoided_phrase,
             "score": max(0, score),
             "issues": issues,
         }

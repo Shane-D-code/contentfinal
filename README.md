@@ -101,7 +101,7 @@ cd content-engine
 cp .env.example .env
 # Edit .env if needed (defaults work for local dev)
 
-# Create virtual environment
+# Create virtual environment (Python 3.9+ supported; 3.11 recommended)
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

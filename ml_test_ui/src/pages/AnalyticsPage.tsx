@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { BarChart3, TrendingUp, Calendar, Download, Star } from 'lucide-react'
+import { BarChart3, TrendingUp, Calendar, Download, Star, Clock, Folder, Check } from 'lucide-react'
 import { Card, Btn } from '../components/ui'
 import { useAnalytics } from '../contexts/AnalyticsContext'
 import { loadJobs } from '../lib/cache'
@@ -29,10 +29,10 @@ export default function AnalyticsPage() {
     : '—'
 
   const stats = [
-    { label: 'Total Jobs',       value: analytics.totalJobs || cachedJobs.length, icon: '📊', color: 'var(--accent)' },
-    { label: 'Avg Gen Time',     value: analytics.avgTime > 0 ? `${analytics.avgTime.toFixed(0)}s` : '—', icon: '⏱️', color: 'var(--green)' },
-    { label: 'Recent Jobs',      value: Math.max(analytics.recentJobs.length, cachedJobs.length), icon: '📁', color: 'var(--blue)' },
-    { label: 'Avg Rating',       value: avgRating, icon: '⭐', color: 'var(--yellow)' },
+    { label: 'Total Jobs',       value: analytics.totalJobs || cachedJobs.length, icon: BarChart3, color: 'var(--accent)' },
+    { label: 'Avg Gen Time',     value: analytics.avgTime > 0 ? `${analytics.avgTime.toFixed(0)}s` : '-', icon: Clock, color: 'var(--green)' },
+    { label: 'Recent Jobs',      value: Math.max(analytics.recentJobs.length, cachedJobs.length), icon: Folder, color: 'var(--blue)' },
+    { label: 'Avg Rating',       value: avgRating === '—' ? '-' : avgRating, icon: Star, color: 'var(--yellow)' },
   ]
 
   return (
@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
 
       {/* Stats cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 32 }}>
-        {stats.map(({ label, value, icon, color }, i) => (
+        {stats.map(({ label, value, icon: StatIcon, color }, i) => (
           <motion.div
             key={label}
             initial={{ opacity: 0, y: 16 }}
@@ -69,7 +69,7 @@ export default function AnalyticsPage() {
             whileHover={{ y: -3 }}
           >
             <Card style={{ textAlign: 'center', cursor: 'default' }}>
-              <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+              <div style={{ marginBottom: 8, color }}><StatIcon size={28} /></div>
               <div style={{ fontSize: 32, fontWeight: 800, color, marginBottom: 4 }} className="counter-anim">
                 {value}
               </div>
@@ -197,7 +197,7 @@ export default function AnalyticsPage() {
         </div>
         {rating > 0 && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <p style={{ fontSize: 13, color: 'var(--green)' }}>✓ Thanks for your feedback!</p>
+            <p style={{ fontSize: 13, color: 'var(--green)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Check size={14} /> Thanks for your feedback.</p>
           </motion.div>
         )}
       </Card>
