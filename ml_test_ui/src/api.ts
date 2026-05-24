@@ -139,6 +139,8 @@ export interface EnhancedAsset {
 export interface CategoryAssets {
   name: string
   icon: string
+  color?: string
+  confidence?: number
   assets: EnhancedAsset[]
 }
 
@@ -157,8 +159,85 @@ export interface CustomGenerateRequest {
   reel_layout?: string
 }
 
-export const getEnhancedAssets = (jobId: string) => 
-  api.get<EnhancedAssetsResponse>(`/api/assets/enhanced/${jobId}`).then(r => r.data)
+const CATEGORY_DEFINITIONS: Record<string, { name: string; icon: string; color: string; keywords: string[] }> = {
+  stage: {
+    name: 'Stage',
+    icon: '🎤',
+    color: '#e3f2fd',
+    keywords: ['stage', 'presentation', 'podium', 'speaker', 'keynote', 'talk', 'lecture', 'platform'],
+  },
+  booth: {
+    name: 'Booth',
+    icon: '🏪',
+    color: '#e8f5e9',
+    keywords: ['booth', 'exhibit', 'display', 'stand', 'kiosk', 'table', 'setup', 'counter'],
+  },
+  crowd: {
+    name: 'Crowd',
+    icon: '👥',
+    color: '#fff3e0',
+    keywords: ['crowd', 'audience', 'people', 'attendees', 'mass', 'gathering', 'spectators', 'viewers', 'event', 'conference'],
+  },
+  speakers: {
+    name: 'Speakers',
+    icon: '🎙️',
+    color: '#f3e5f5',
+    keywords: ['speaker', 'presenter', 'host', 'moderator', 'panel', 'lecturer', 'guest'],
+  },
+  networking: {
+    name: 'Networking',
+    icon: '🤝',
+    color: '#e0f7fa',
+    keywords: ['networking', 'conversation', 'handshake', 'meeting', 'chat', 'discussion', 'interaction'],
+  },
+  awards: {
+    name: 'Awards',
+    icon: '🏆',
+    color: '#ffebee',
+    keywords: ['award', 'trophy', 'winner', 'prize', 'ceremony', 'medal', 'recognition'],
+  },
+}
+
+const generateSmartCategories = (assets: EnhancedAsset[]): Record<string, CategoryAssets> => {
+  const categories: Record<string, CategoryAssets> = {}
+
+  for (const asset of assets) {
+    const searchable = [asset.url, ...(asset.concepts ?? [])].join(' ').toLowerCase()
+
+    for (const [id, definition] of Object.entries(CATEGORY_DEFINITIONS)) {
+      if (!definition.keywords.some(keyword => searchable.includes(keyword))) continue
+
+      categories[id] ??= {
+        name: definition.name,
+        icon: definition.icon,
+        color: definition.color,
+        confidence: 0,
+        assets: [],
+      }
+      categories[id].assets.push(asset)
+      break
+    }
+  }
+
+  for (const category of Object.values(categories)) {
+    const averageScore = category.assets.reduce((sum, asset) => sum + asset.score, 0) / category.assets.length
+    category.confidence = Math.round(Math.min(1, averageScore || 0) * 100)
+  }
+
+  return categories
+}
+
+export const getEnhancedAssets = (jobId: string) =>
+  api.get<EnhancedAssetsResponse>(`/api/assets/enhanced/${jobId}`).then(r => {
+    const data = r.data
+    const hasCategories = Object.values(data.per_category ?? {}).some(category => category.assets?.length > 0)
+
+    if (!hasCategories && data.top_overall?.length > 0) {
+      data.per_category = generateSmartCategories(data.top_overall)
+    }
+
+    return data
+  })
 
 export const generateCustom = (req: CustomGenerateRequest) => 
   api.post<any>('/api/generate/custom', req).then(r => r.data)

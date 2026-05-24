@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Sparkles, Plus, Check, Zap, ChevronLeft, Star, LayoutGrid, Users, TrendingUp, Layout, Loader2, AlertCircle, Eye, RefreshCw, Mic, Store, Mic2, Handshake, Trophy, Tag } from 'lucide-react'
+import { Sparkles, Plus, Check, Zap, ChevronLeft, Star, LayoutGrid, Users, TrendingUp, Layout, Loader2, AlertCircle, Eye, RefreshCw, Mic, Store, Mic2, Handshake, Trophy, Tag, Search, Image as ImageIcon } from 'lucide-react'
 import { Card, Btn } from '../components/ui'
 import { toast } from '../components/ui/Toast'
-import { getEnhancedAssets, getLayoutPreview } from '../api'
+import { getEnhancedAssets, getJobStatus, getLayoutPreview } from '../api'
 import { LINKEDIN_LAYOUTS, STORY_LAYOUTS, REEL_LAYOUTS } from '../constants/layouts'
 import './AssetSelectionPage.css'
 
@@ -101,7 +101,15 @@ interface EnhancedAsset {
 interface CategoryAssets {
   name: string
   icon: string
+  color?: string
+  confidence?: number
   assets: EnhancedAsset[]
+}
+
+interface JobProgressState {
+  message?: string
+  percent?: number
+  status?: string
 }
 
 interface Props {
@@ -114,7 +122,7 @@ interface Props {
 
 export default function AssetSelectionPage({ onContinue, onBack, eventName, jobId, files = [] }: Props) {
   const [isProcessing, setIsProcessing] = useState(true)
-  const [progress, setProgress] = useState(0)
+  const [jobProgress, setJobProgress] = useState<JobProgressState | null>(null)
   const [topAssets, setTopAssets] = useState<EnhancedAsset[]>([])
   const [categories, setCategories] = useState<Record<string, CategoryAssets>>({})
   const [stats, setStats] = useState({ total: 0, unique: 0, deduped: 0 })
@@ -123,6 +131,9 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
   const [selectedAssets, setSelectedAssets] = useState<string[]>([])
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [minScore, setMinScore] = useState(0)
+  const [sortBy, setSortBy] = useState<'score' | 'faces' | 'name'>('score')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const [liLayout, setLiLayout] = useState('hero_right')
   const [stLayout, setStLayout] = useState('single')
@@ -130,41 +141,36 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
 
   const MAX_SELECTIONS = 10
 
-  const STATUS_MESSAGES = [
-    'Analyzing uploaded visuals...',
-    'Detecting event highlights...',
-    'Identifying crowd moments...',
-    'Selecting best compositions...',
-    'Grouping similar scenes...',
-    'Optimizing media recommendations...',
-  ]
-
-  useEffect(() => {
-    if (jobId) {
-      getEnhancedAssets(jobId)
-        .then(data => {
-          setTopAssets(data.top_overall)
-          setCategories(data.per_category)
-          setStats({
-            total: data.stats?.total ?? 0,
-            unique: data.stats?.unique ?? 0,
-            deduped: data.stats?.deduped ?? data.stats?.duplicates_removed ?? 0,
-          })
-          const def = data.top_overall.slice(0, 6).map(a => a.id)
-          setSelectedAssets(def)
-          setIsProcessing(false)
-          setError(null)
-        })
-        .catch(err => {
-          console.log('Failed to load enhanced assets, using fallback', err)
-          loadFallback()
-        })
-    } else {
-      loadFallback()
+  const buildFallbackCategories = useCallback((assets: EnhancedAsset[]) => {
+    const definitions: Record<string, Omit<CategoryAssets, 'assets'> & { keywords: string[] }> = {
+      stage: { name: 'Stage', icon: '🎤', color: '#e3f2fd', confidence: 0, keywords: ['stage', 'presentation', 'podium', 'speaker', 'keynote', 'talk'] },
+      booth: { name: 'Booth', icon: '🏪', color: '#e8f5e9', confidence: 0, keywords: ['booth', 'exhibit', 'display', 'stand', 'kiosk', 'table'] },
+      crowd: { name: 'Crowd', icon: '👥', color: '#fff3e0', confidence: 0, keywords: ['crowd', 'audience', 'people', 'attendees', 'gathering', 'event', 'conference'] },
+      speakers: { name: 'Speakers', icon: '🎙️', color: '#f3e5f5', confidence: 0, keywords: ['speaker', 'presenter', 'host', 'moderator', 'panel'] },
+      networking: { name: 'Networking', icon: '🤝', color: '#e0f7fa', confidence: 0, keywords: ['networking', 'conversation', 'handshake', 'meeting', 'chat'] },
+      awards: { name: 'Awards', icon: '🏆', color: '#ffebee', confidence: 0, keywords: ['award', 'trophy', 'winner', 'prize', 'ceremony'] },
     }
-  }, [jobId])
+    const generated: Record<string, CategoryAssets> = {}
 
-  const loadFallback = () => {
+    assets.forEach(asset => {
+      const searchable = [asset.url, ...(asset.concepts ?? [])].join(' ').toLowerCase()
+      for (const [id, definition] of Object.entries(definitions)) {
+        if (!definition.keywords.some(keyword => searchable.includes(keyword))) continue
+        generated[id] ??= { name: definition.name, icon: definition.icon, color: definition.color, confidence: 0, assets: [] }
+        generated[id].assets.push(asset)
+        break
+      }
+    })
+
+    Object.values(generated).forEach(category => {
+      const averageScore = category.assets.reduce((sum, asset) => sum + asset.score, 0) / category.assets.length
+      category.confidence = Math.round(Math.min(1, averageScore || 0) * 100)
+    })
+
+    return generated
+  }, [])
+
+  const loadFallback = useCallback(() => {
     const seenHashes = new Set<string>()
     const newAssets: EnhancedAsset[] = []
     const filesToUse = files || []
@@ -178,38 +184,135 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
       if (seenHashes.has(fileHash)) return
       seenHashes.add(fileHash)
       const url = URL.createObjectURL(file)
+      const nameConcepts = file.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
       newAssets.push({
         id: `asset-${i + 1}`,
         url,
         score: Math.floor(Math.random() * 25 + 75) / 100,
         faces: Math.floor(Math.random() * 5),
-        concepts: ['event', 'conference'],
+        concepts: Array.from(new Set(['event', 'conference', ...nameConcepts])).slice(0, 6),
       })
     })
 
     newAssets.sort((a, b) => b.score - a.score)
-    setTopAssets(newAssets.slice(0, 10))
-    setStats({ total: filesToUse.length, unique: newAssets.length, deduped: filesToUse.length - newAssets.length })
-    setSelectedAssets(newAssets.slice(0, 6).map(a => a.id))
+    const fallbackAssets = newAssets.slice(0, 10)
+    setTopAssets(fallbackAssets)
+    setCategories(buildFallbackCategories(fallbackAssets))
+    setStats({ total: filesToUse.length, unique: fallbackAssets.length, deduped: filesToUse.length - fallbackAssets.length })
+    setSelectedAssets(fallbackAssets.slice(0, 6).map(a => a.id))
     setIsProcessing(false)
-  }
+    setError(null)
+  }, [buildFallbackCategories, files])
+
+  const fetchAssets = useCallback(async (allowFallback = true) => {
+    if (!jobId) {
+      loadFallback()
+      return true
+    }
+
+    try {
+      const data = await getEnhancedAssets(jobId)
+      console.log('Enhanced Assets Response:', {
+        topOverallCount: data.top_overall?.length ?? 0,
+        categoriesCount: Object.values(data.per_category || {}).filter(cat => cat.assets?.length > 0).length,
+        stats: data.stats,
+      })
+
+      if (data.stats?.pending_processing && (!data.top_overall || data.top_overall.length === 0)) {
+        setIsProcessing(true)
+        setJobProgress(prev => prev ?? { message: 'Processing your assets...', percent: 0, status: 'processing' })
+        return false
+      }
+
+      if ((!data.top_overall || data.top_overall.length === 0) && files.length > 0 && allowFallback) {
+        console.warn('No enhanced assets from API, using local fallback')
+        loadFallback()
+        return true
+      }
+
+      const top = data.top_overall || []
+      const generatedCategories = Object.values(data.per_category || {}).some(cat => cat.assets?.length > 0)
+        ? data.per_category
+        : buildFallbackCategories(top)
+
+      setTopAssets(top)
+      setCategories(generatedCategories || {})
+      setStats({
+        total: data.stats?.total ?? 0,
+        unique: data.stats?.unique ?? top.length,
+        deduped: data.stats?.deduped ?? data.stats?.duplicates_removed ?? 0,
+      })
+      setSelectedAssets(top.slice(0, 6).map(a => a.id))
+      setIsProcessing(false)
+      setError(null)
+      return true
+    } catch (err) {
+      console.error('Failed to fetch enhanced assets:', err)
+      const response = (err as { response?: { status?: number; data?: { detail?: string } } }).response
+      const detail = response?.data?.detail || ''
+      if (jobId && response?.status === 400 && detail.toLowerCase().includes('not completed')) {
+        setIsProcessing(true)
+        setJobProgress(prev => prev ?? { message: 'Processing your assets...', percent: 0, status: 'processing' })
+        return false
+      }
+
+      if (files.length > 0 && allowFallback) {
+        toast.warning('Using local asset fallback', 'Enhanced asset scoring is not available yet.')
+        loadFallback()
+        return true
+      }
+
+      setError('Failed to load assets. Please check the backend and try again.')
+      setIsProcessing(false)
+      return true
+    }
+  }, [buildFallbackCategories, files.length, jobId, loadFallback])
 
   useEffect(() => {
-    if (!isProcessing) return
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval)
-          return 100
+    let cancelled = false
+    let pollInterval: number | undefined
+
+    const syncStatus = async () => {
+      if (!jobId) return
+      try {
+        const status = await getJobStatus(jobId)
+        if (cancelled) return
+
+        const progress = status.progress
+        const percent = typeof progress?.pct === 'number' ? progress.pct : undefined
+        setJobProgress({
+          message: progress?.step || status.error || undefined,
+          percent,
+          status: status.status,
+        })
+
+        if (status.status === 'completed') {
+          if (pollInterval) window.clearInterval(pollInterval)
+          await fetchAssets(true)
+        } else if (status.status === 'failed') {
+          if (pollInterval) window.clearInterval(pollInterval)
+          setError(status.error || 'Asset processing failed.')
+          setIsProcessing(false)
         }
-        return prev + 2
-      })
-    }, 100)
+      } catch (err) {
+        console.error('Job status poll failed:', err)
+      }
+    }
 
-    return () => clearInterval(interval)
-  }, [isProcessing])
+    fetchAssets(true).then(done => {
+      if (cancelled || done || !jobId) return
+      syncStatus()
+      pollInterval = window.setInterval(syncStatus, 2000)
+    })
 
-  const currentMessage = STATUS_MESSAGES[Math.min(Math.floor((progress / 100) * STATUS_MESSAGES.length), STATUS_MESSAGES.length - 1)]
+    return () => {
+      cancelled = true
+      if (pollInterval) window.clearInterval(pollInterval)
+    }
+  }, [fetchAssets, jobId])
+
+  const progressPercent = jobProgress?.percent ?? (isProcessing ? 0 : 100)
+  const currentMessage = jobProgress?.message || (jobProgress?.status ? `Job ${jobProgress.status}` : 'Processing your assets...')
 
   const toggleAsset = useCallback((assetId: string) => {
     setSelectedAssets(prev => {
@@ -240,13 +343,51 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
     }
   }
 
-  const displayAssets = tab === 'categories' && activeCat
+  const categoryEntries = useMemo(
+    () => Object.entries(categories).filter(([, cat]) => cat.assets.length > 0),
+    [categories]
+  )
+
+  const baseDisplayAssets = tab === 'categories' && activeCat
     ? categories[activeCat]?.assets || []
     : topAssets
 
+  const displayAssets = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    return [...baseDisplayAssets]
+      .filter(asset => asset.score >= minScore)
+      .filter(asset => {
+        if (!query) return true
+        return asset.url.toLowerCase().includes(query) ||
+          (asset.concepts || []).some(concept => concept.toLowerCase().includes(query))
+      })
+      .sort((a, b) => {
+        if (sortBy === 'score') return b.score - a.score
+        if (sortBy === 'faces') return b.faces - a.faces
+        return a.url.localeCompare(b.url)
+      })
+  }, [baseDisplayAssets, minScore, searchQuery, sortBy])
+
+  const allKnownAssets = useMemo(() => {
+    const byId = new Map<string, EnhancedAsset>()
+    ;[...topAssets, ...Object.values(categories).flatMap(c => c.assets)].forEach(asset => {
+      byId.set(asset.id, asset)
+    })
+    return Array.from(byId.values())
+  }, [categories, topAssets])
+
+  const selectTop = useCallback((count: number) => {
+    const top = [...displayAssets].sort((a, b) => b.score - a.score).slice(0, count)
+    setSelectedAssets(top.map(a => a.id))
+  }, [displayAssets])
+
+  const selectAllDisplayed = useCallback(() => {
+    setSelectedAssets(displayAssets.slice(0, MAX_SELECTIONS).map(a => a.id))
+  }, [displayAssets])
+
   // Get selected asset objects
   const selectedAssetList = selectedAssets
-    .map(id => topAssets.find(a => a.id === id) || Object.values(categories).flatMap(c => c.assets).find(a => a.id === id))
+    .map(id => allKnownAssets.find(a => a.id === id))
     .filter(Boolean) as EnhancedAsset[]
 
   if (error) {
@@ -272,7 +413,7 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
       <div style={{ textAlign: 'center', marginBottom: '32px' }}>
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
           <h1 style={{ fontSize: 'clamp(28px, 5vw, 42px)', fontWeight: 800, lineHeight: 1.15, marginBottom: '12px' }}>
-            {isProcessing ? 'Generating Content' : 'Curate Your Content'}
+            {isProcessing ? 'Processing Assets' : 'Curate Your Content'}
           </h1>
         </motion.div>
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} style={{ fontSize: '16px', color: 'var(--t2)', maxWidth: '520px', margin: '0 auto', lineHeight: 1.6 }}>
@@ -294,10 +435,10 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ maxWidth: '640px', margin: '0 auto 48px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--t2)' }}>{currentMessage}</span>
-            <span style={{ fontSize: '24px', fontWeight: 700, color: 'var(--t1)' }}>{Math.round(progress)}%</span>
+            <span style={{ fontSize: '24px', fontWeight: 700, color: 'var(--t1)' }}>{Math.round(progressPercent)}%</span>
           </div>
           <div style={{ position: 'relative', height: '12px', background: 'var(--s2)', borderRadius: '9999px', overflow: 'hidden' }}>
-            <motion.div style={{ background: 'linear-gradient(90deg, #8B5CF6, #22D3EE, #8B5CF6)', backgroundSize: '200% 100%', borderRadius: '9999px' }} animate={{ width: `${progress}%`, backgroundPosition: ['0% 0%', '200% 0%'] }} transition={{ width: { duration: 0.3 }, backgroundPosition: { duration: 1.5, repeat: Infinity, ease: 'linear' } }} />
+            <motion.div style={{ height: '100%', background: 'linear-gradient(90deg, #8B5CF6, #22D3EE)', borderRadius: '9999px' }} animate={{ width: `${progressPercent}%` }} transition={{ width: { duration: 0.3 } }} />
             <motion.div animate={{ x: ['-100%', '100%'] }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }} style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)' }} />
           </div>
         </motion.div>
@@ -310,28 +451,76 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
               <button className={`tab ${tab === 'overall' ? 'active' : ''}`} onClick={() => setTab('overall')} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.625rem 1.25rem', background: tab === 'overall' ? 'var(--s1)' : 'transparent', border: 'none', borderRadius: '12px', color: tab === 'overall' ? 'var(--a2)' : 'var(--t2)', cursor: 'pointer', fontSize: '14px', fontWeight: 600, transition: 'all 0.2s' }}>
                 <Star size={16} /> Top {topAssets.length} Overall
               </button>
-              <button className={`tab ${tab === 'categories' ? 'active' : ''}`} onClick={() => setTab('categories')} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.625rem 1.25rem', background: tab === 'categories' ? 'var(--s1)' : 'transparent', border: 'none', borderRadius: '12px', color: tab === 'categories' ? 'var(--a2)' : 'var(--t2)', cursor: 'pointer', fontSize: '14px', fontWeight: 600, transition: 'all 0.2s' }}>
-                <LayoutGrid size={16} /> By Category
+              <button className={`tab ${tab === 'categories' ? 'active' : ''}`} onClick={() => setTab('categories')} disabled={categoryEntries.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.625rem 1.25rem', background: tab === 'categories' ? 'var(--s1)' : 'transparent', border: 'none', borderRadius: '12px', color: tab === 'categories' ? 'var(--a2)' : 'var(--t2)', cursor: categoryEntries.length === 0 ? 'not-allowed' : 'pointer', opacity: categoryEntries.length === 0 ? 0.55 : 1, fontSize: '14px', fontWeight: 600, transition: 'all 0.2s' }}>
+                <LayoutGrid size={16} /> By Category ({categoryEntries.length})
               </button>
             </div>
 
+            <Card style={{ padding: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(180px, 220px) minmax(140px, 180px)', gap: '14px', alignItems: 'end' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', fontWeight: 700, color: 'var(--t2)' }}>
+                  Search
+                  <div style={{ position: 'relative' }}>
+                    <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--t3)' }} />
+                    <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Filename or concept" style={{ width: '100%', height: '40px', padding: '0 12px 0 36px', background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: '10px', color: 'var(--t1)', outline: 'none' }} />
+                  </div>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', fontWeight: 700, color: 'var(--t2)' }}>
+                  Min Score: {Math.round(minScore * 100)}%
+                  <input type="range" min={0} max={1} step={0.05} value={minScore} onChange={e => setMinScore(Number(e.target.value))} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', fontWeight: 700, color: 'var(--t2)' }}>
+                  Sort
+                  <select value={sortBy} onChange={e => setSortBy(e.target.value as 'score' | 'faces' | 'name')} style={{ height: '40px', padding: '0 12px', background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: '10px', color: 'var(--t1)', outline: 'none' }}>
+                    <option value="score">Score</option>
+                    <option value="faces">Faces</option>
+                    <option value="name">Name</option>
+                  </select>
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '14px' }}>
+                <Btn variant="ghost" size="sm" onClick={() => selectTop(5)} disabled={displayAssets.length === 0}>Select Top 5</Btn>
+                <Btn variant="ghost" size="sm" onClick={selectAllDisplayed} disabled={displayAssets.length === 0}>Select All</Btn>
+                <Btn variant="ghost" size="sm" onClick={() => setSelectedAssets([])} disabled={selectedAssets.length === 0}>Clear All</Btn>
+              </div>
+            </Card>
+
             {tab === 'categories' && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                {Object.entries(categories).map(([id, cat]) => (
-                  cat.assets.length > 0 && (
-                    (() => {
-                      const CategoryIcon = categoryIcons[id as keyof typeof categoryIcons] ?? Tag
-                      return (
-                        <motion.button key={id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setActiveCat(activeCat === id ? null : id)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', background: activeCat === id ? 'var(--accent)' : 'var(--s1)', border: activeCat === id ? '1px solid var(--accent)' : '1px solid var(--b1)', borderRadius: '40px', fontSize: '0.8125rem', cursor: 'pointer', color: activeCat === id ? 'white' : 'var(--t2)', transition: 'all 0.2s' }}>
-                          <CategoryIcon size={14} /> {cat.name} ({cat.assets.length})
-                        </motion.button>
-                      )
-                    })()
+                {categoryEntries.map(([id, cat]) => {
+                  const CategoryIcon = categoryIcons[id as keyof typeof categoryIcons] ?? Tag
+                  return (
+                    <motion.button key={id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setActiveCat(activeCat === id ? null : id)} style={{ minWidth: '150px', display: 'flex', flexDirection: 'column', gap: '0.45rem', padding: '0.65rem 0.85rem', background: activeCat === id ? 'var(--accent)' : 'var(--s1)', border: activeCat === id ? '1px solid var(--accent)' : '1px solid var(--b1)', borderRadius: '12px', fontSize: '0.8125rem', cursor: 'pointer', color: activeCat === id ? 'white' : 'var(--t2)', transition: 'all 0.2s', textAlign: 'left' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700 }}>
+                        <CategoryIcon size={14} /> {cat.name} ({cat.assets.length})
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '11px', opacity: 0.85 }}>
+                        <span style={{ flex: 1, height: '4px', background: activeCat === id ? 'rgba(255,255,255,0.25)' : 'var(--s2)', borderRadius: '999px', overflow: 'hidden' }}>
+                          <span style={{ display: 'block', width: `${cat.confidence ?? Math.round(cat.assets[0]?.score * 100) ?? 0}%`, height: '100%', background: activeCat === id ? '#fff' : 'var(--accent)' }} />
+                        </span>
+                        {cat.confidence ?? Math.round(cat.assets[0]?.score * 100) ?? 0}%
+                      </span>
+                    </motion.button>
                   )
-                ))}
+                })}
               </div>
             )}
 
+            {topAssets.length === 0 ? (
+              <Card style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <ImageIcon size={48} style={{ color: 'var(--t3)', marginBottom: '16px' }} />
+                <h3 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '8px' }}>No Assets Found</h3>
+                <p style={{ color: 'var(--t2)', marginBottom: '24px' }}>Upload images or videos to see AI-curated selections here.</p>
+                <Btn onClick={onBack}><ChevronLeft size={16} /> Go to Upload</Btn>
+              </Card>
+            ) : displayAssets.length === 0 ? (
+              <Card style={{ padding: '40px 24px', textAlign: 'center' }}>
+                <Search size={40} style={{ color: 'var(--t3)', marginBottom: '16px' }} />
+                <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>No Matching Assets</h3>
+                <p style={{ color: 'var(--t2)', marginBottom: '20px' }}>Adjust the search text, category, or minimum score.</p>
+                <Btn variant="ghost" onClick={() => { setSearchQuery(''); setMinScore(0); setActiveCat(null) }}>Clear Filters</Btn>
+              </Card>
+            ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))', gap: '1rem' }}>
               {displayAssets.map((asset, idx) => {
                 const isSelected = selectedAssets.includes(asset.id)
@@ -363,6 +552,7 @@ export default function AssetSelectionPage({ onContinue, onBack, eventName, jobI
                 )
               })}
             </div>
+            )}
           </div>
 
           <div>
