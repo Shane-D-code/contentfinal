@@ -83,7 +83,7 @@ class GFFOrchestrator:
         """
         Full pipeline. Returns output directory path.
         """
-        _log.info("gff_pipeline_start", event=self.event_name)
+        _log.info("gff_pipeline_start", event_name=self.event_name)
 
         images, videos = _discover(asset_folder)
         _log.info("assets_found", images=len(images), videos=len(videos))

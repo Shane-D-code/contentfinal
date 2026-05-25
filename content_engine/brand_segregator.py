@@ -40,6 +40,8 @@ class AssetClassification:
     brand_id: Optional[str]  # None if unmatched
     confidence: float
     similarity_scores: Dict[str, float]  # brand_id -> score
+    confidence_band: str = "low"
+    margin_to_second: float = 0.0
 
 
 class BrandSegregator:
@@ -74,6 +76,7 @@ class BrandSegregator:
             similarity_threshold: Minimum similarity to assign a brand (0-1)
         """
         self.similarity_threshold = similarity_threshold
+        self.min_margin = 0.05
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._model = None
         self._preprocess = None
@@ -157,6 +160,8 @@ class BrandSegregator:
                 brand_id=None,
                 confidence=0.0,
                 similarity_scores=similarity_scores,
+                confidence_band="low",
+                margin_to_second=0.0,
             )
 
         try:
@@ -176,20 +181,33 @@ class BrandSegregator:
         except Exception as e:
             _log.warning("asset_classification_failed", error=str(e), path=asset_path)
 
-        # Find best matching brand
+        # Find best matching brand with reranking guard on second-best margin.
+        ranked = sorted(similarity_scores.items(), key=lambda x: x[1], reverse=True)
         best_brand_id = None
         best_confidence = 0.0
+        margin = 0.0
+        if ranked:
+            best_id, best_score = ranked[0]
+            second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+            margin = max(0.0, round(best_score - second_score, 4))
+            if best_score >= self.similarity_threshold and margin >= self.min_margin:
+                best_brand_id = best_id
+                best_confidence = best_score
 
-        for brand_id, score in similarity_scores.items():
-            if score >= self.similarity_threshold and score > best_confidence:
-                best_brand_id = brand_id
-                best_confidence = score
+        if best_confidence >= 0.75:
+            band = "high"
+        elif best_confidence >= self.similarity_threshold:
+            band = "medium"
+        else:
+            band = "low"
 
         return AssetClassification(
             path=asset_path,
             brand_id=best_brand_id,
             confidence=best_confidence,
             similarity_scores=similarity_scores,
+            confidence_band=band,
+            margin_to_second=margin,
         )
 
     def segregate_assets(self, asset_paths: List[str]) -> Dict[str, List[AssetClassification]]:

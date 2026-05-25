@@ -388,6 +388,60 @@ def _story_captions_template(event_name: str, num_slides: int) -> List[str]:
     return arc[:num_slides]
 
 
+class _StepOneToneGuard:
+    """Lightweight QA/refinement pass for StepOne tone-of-voice enforcement."""
+
+    _required_tokens = [
+        "insight-driven",
+        "experience-led",
+        "measurable impact",
+        "experiential intelligence",
+        "audience behavior",
+        "moments",
+        "engagement",
+        "community",
+    ]
+    _forbidden_phrases = [
+        "creative agency",
+        "event management",
+        "we provide solutions",
+    ]
+    _passive_markers = [" was ", " were ", " been ", " being "]
+
+    @classmethod
+    def score(cls, text: str) -> Dict[str, object]:
+        lower = f" {text.lower()} "
+        required_used = [t for t in cls._required_tokens if t in lower]
+        forbidden_used = [t for t in cls._forbidden_phrases if t in lower]
+        passive_hits = sum(lower.count(tok) for tok in cls._passive_markers)
+        score = max(0.0, min(1.0, 0.45 + 0.07 * len(required_used) - 0.18 * len(forbidden_used) - 0.04 * passive_hits))
+        issues: List[str] = []
+        if forbidden_used:
+            issues.append(f"forbidden_phrases={forbidden_used}")
+        if len(required_used) < 2:
+            issues.append("low_stepone_vocab_coverage")
+        if passive_hits > 4:
+            issues.append("passive_voice_heavy")
+        return {
+            "score": round(score, 3),
+            "required_used": required_used,
+            "forbidden_used": forbidden_used,
+            "passive_hits": passive_hits,
+            "issues": issues,
+        }
+
+    @classmethod
+    def refine(cls, text: str, platform: str) -> str:
+        refined = text
+        for bad in cls._forbidden_phrases:
+            refined = re.sub(re.escape(bad), "experience-led team", refined, flags=re.IGNORECASE)
+        if "insight-driven" not in refined.lower():
+            refined = f"Insight-driven work in motion.\n{refined}"
+        if platform in {"instagram", "reel", "story"} and "community" not in refined.lower():
+            refined = f"{refined}\nBuilt for community and measurable impact."
+        return refined
+
+
 # ── Local LLM fallback (Phi-3.5-mini) ────────────────────────────────────────
 
 class _LocalLLMGenerator:
@@ -456,12 +510,20 @@ class CopyGenerator:
                 _log.info("local_llm_loaded", model=_LocalLLMGenerator._MODEL_ID)
             except Exception as e:
                 warnings.warn(f"Local LLM unavailable: {e}")
+        self._tone_guard = _StepOneToneGuard()
 
     @property
     def backend(self) -> str:
         if self._groq:  return "groq"
         if self._llm:   return "local_llm"
         return "template"
+
+    def evaluate_stepone_tone(self, text: str) -> Dict[str, object]:
+        """Expose StepOne tone QA for API and orchestration diagnostics."""
+        base = self._tone_guard.score(text)
+        strict = stepone_brand_voice.validate_copy(text)
+        base["strict_issues"] = strict.get("issues", [])
+        return base
 
     # ── LinkedIn ──────────────────────────────────────────────────────────────
 
@@ -686,17 +748,18 @@ Write the caption:"""
                 result = self._groq.complete(prompt, max_tokens=180)
                 _log.info("brand_carousel_caption_done", brand=brand_name, chars=len(result))
 
-                # Validate against brand voice
                 validation = stepone_brand_voice.validate_copy(result)
-                if validation["issues"]:
-                    _log.warning("caption_brand_voice_issues", brand=brand_name, issues=validation["issues"])
-
+                tone = self._tone_guard.score(result)
+                if validation["issues"] or tone["issues"]:
+                    _log.warning("caption_brand_voice_issues", brand=brand_name, issues=validation["issues"], tone=tone)
+                    result = self._tone_guard.refine(result, "instagram")
                 return result
             except Exception as e:
                 _log.warning("brand_caption_failed", error=str(e), brand=brand_name)
 
         # Template fallback with brand voice
-        return _brand_carousel_template(brand_name, event_name, assets)
+        fallback = _brand_carousel_template(brand_name, event_name, assets)
+        return self._tone_guard.refine(fallback, "instagram")
 
     def generate_brand_reel_caption(
         self,
@@ -739,11 +802,16 @@ Write the caption:"""
 
                 result = self._groq.complete(prompt, max_tokens=120)
                 _log.info("brand_reel_caption_done", brand=brand_name, chars=len(result))
+                tone = self._tone_guard.score(result)
+                if tone["issues"]:
+                    _log.warning("reel_tone_guard_refine", brand=brand_name, tone=tone)
+                    result = self._tone_guard.refine(result, "reel")
                 return result
             except Exception as e:
                 _log.warning("brand_reel_caption_failed", error=str(e), brand=brand_name)
 
-        return _brand_reel_template(brand_name, event_name, assets)
+        fallback = _brand_reel_template(brand_name, event_name, assets)
+        return self._tone_guard.refine(fallback, "reel")
 
     def generate_brand_story_captions(
         self,
@@ -793,13 +861,15 @@ Write the story captions (format: frame1 | frame2 | frame3 | frame4):"""
                 captions = [c.strip() for c in result.split("|")][:num_slides]
                 if len(captions) < num_slides:
                     captions = (captions + _story_captions_template(event_name, num_slides))[:num_slides]
+                captions = [self._tone_guard.refine(c, "story") for c in captions]
 
                 _log.info("brand_story_captions_done", brand=brand_name, frames=len(captions))
                 return captions
             except Exception as e:
                 _log.warning("brand_story_captions_failed", error=str(e), brand=brand_name)
 
-        return _brand_story_template(brand_name, event_name, num_slides)
+        fallback = _brand_story_template(brand_name, event_name, num_slides)
+        return [self._tone_guard.refine(c, "story") for c in fallback]
 
 
 # ── Brand-aware templates ─────────────────────────────────────────────────────

@@ -174,7 +174,7 @@ class BrandOrchestrator:
         Returns:
             Path to the output directory.
         """
-        _log.info("brand_pipeline_start", event=self.event_name, assets=asset_folder)
+        _log.info("brand_pipeline_start", event_name=self.event_name, asset_folder=asset_folder)
 
         # ── Step 1: Discover assets ─────────────────────────────────────────────
         assets = _discover_assets(asset_folder)
@@ -372,6 +372,8 @@ class BrandOrchestrator:
                 "path": c.path,
                 "best_match": max(c.similarity_scores.items(), key=lambda x: x[1]) if c.similarity_scores else (None, 0),
                 "confidence": c.confidence,
+                "confidence_band": c.confidence_band,
+                "margin_to_second": c.margin_to_second,
                 "all_scores": c.similarity_scores,
             })
 
@@ -401,6 +403,8 @@ class BrandOrchestrator:
                     {
                         "path": c.path,
                         "confidence": c.confidence,
+                        "confidence_band": c.confidence_band,
+                        "margin_to_second": c.margin_to_second,
                         "similarity_scores": c.similarity_scores,
                     }
                     for c in classifications

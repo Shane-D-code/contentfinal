@@ -1,74 +1,45 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 
 // Types
-type Theme = 'dark' | 'light' | 'system'
+// Theme is hard-locked to dark to match Studio cinematic experience.
+type Theme = 'dark'
 interface ThemeContextType {
   theme: Theme
   setTheme: (theme: Theme) => void
-  resolvedTheme: 'dark' | 'light'
+  resolvedTheme: 'dark'
 }
+
 
 // Context
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
 // Provider
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('system')
-  const [resolvedTheme, setResolvedTheme] = useState<'dark' | 'light'>('dark')
-  const [mounted, setMounted] = useState(false)
+  const [theme] = useState<Theme>('dark')
+  const [resolvedTheme] = useState<'dark'>('dark')
+  // Mount flag removed to avoid state updates in effects (lint).
 
-  // System preference
+  // Hard-lock: always mark html as dark.
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = () => {
-      if (theme === 'system') {
-        setResolvedTheme(mediaQuery.matches ? 'dark' : 'light')
-      }
+
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.add('dark')
+      document.documentElement.setAttribute('data-theme', 'dark')
     }
-    handleChange()
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [theme])
-
-  // Persist theme
-  useEffect(() => {
-    const saved = localStorage.getItem('theme') as Theme | null
-    if (saved && ['dark', 'light', 'system'].includes(saved)) {
-      setTheme(saved)
-    } else {
-      localStorage.setItem('theme', theme)
+    try {
+      localStorage.setItem('theme', 'dark')
+    } catch {
+      // ignore
     }
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem('theme', theme)
-  }, [theme])
-
-  // Mount for SSR
-  useEffect(() => {
-    setMounted(true)
   }, [])
 
   const value = {
     theme,
-    setTheme,
+    // setTheme is kept for compatibility but does nothing (dark-only)
+    setTheme: (_t: Theme) => {},
     resolvedTheme,
   }
 
-  // Apply to html
-  useEffect(() => {
-    if (typeof document !== 'undefined') {
-      if (theme === 'dark' || (theme === 'system' && resolvedTheme === 'dark')) {
-        document.documentElement.classList.add('dark')
-      } else {
-        document.documentElement.classList.remove('dark')
-      }
-    }
-  }, [theme, resolvedTheme])
-
-  if (!mounted) {
-    return <div className="h-screen bg-gray-50 dark:bg-gray-900" />
-  }
 
   return (
     <ThemeContext.Provider value={value}>
@@ -76,6 +47,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     </ThemeContext.Provider>
   )
 }
+
 
 // Hook
 export function useTheme() {

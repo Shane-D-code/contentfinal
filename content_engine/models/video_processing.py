@@ -42,24 +42,48 @@ class VideoProcessor:
 
     def extract_scenes(self, video_path: str) -> List[float]:
         """
-        Find scene change timestamps using PySceneDetect.
+        Find scene change timestamps using PySceneDetect (v0.6+ modern API).
         Returns list of scene start times in seconds.
+
+        Uses open_video + SceneManager instead of the deprecated VideoManager.
+        Falls back to interval-based segmentation if scene detection fails.
         """
-        from scenedetect import VideoManager, SceneManager
-        from scenedetect.detectors import ContentDetector
-
-        video_manager = VideoManager([video_path])
-        scene_manager = SceneManager()
-        scene_manager.add_detector(ContentDetector(threshold=30.0))
-
         try:
-            video_manager.start()
-            scene_manager.detect_scenes(frame_source=video_manager)
-            scenes = scene_manager.get_scene_list()
-        finally:
-            video_manager.release()
+            from scenedetect import open_video, SceneManager, ContentDetector
 
-        return [scene[0].get_seconds() for scene in scenes]
+            video = open_video(video_path)
+            scene_manager = SceneManager()
+            scene_manager.add_detector(ContentDetector(threshold=30.0))
+            scene_manager.detect_scenes(video=video)
+            scenes = scene_manager.get_scene_list()
+            return [scene[0].get_seconds() for scene in scenes]
+
+        except Exception as e:
+            # Graceful fallback: interval-based segmentation every 3 seconds
+            try:
+                from api.logger import get_logger
+                _log = get_logger(__name__)
+                _log.warning("scene_detection_failed", error=str(e), fallback="interval_3s")
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "scene_detection_failed — falling back to interval segmentation: %s", e
+                )
+            return self._interval_scenes(video_path, interval=3.0)
+
+    def _interval_scenes(self, video_path: str, interval: float = 3.0) -> List[float]:
+        """
+        Fallback: return scene start times at fixed intervals.
+        Used when PySceneDetect fails (corrupt file, unsupported codec, etc.).
+        """
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        if total_frames <= 0 or fps <= 0:
+            return []
+        duration = total_frames / fps
+        return [round(t, 2) for t in np.arange(0.0, duration, interval).tolist()]
 
     # ── Audio energy extraction ─────────────────────────────────────────────────
 
@@ -204,37 +228,83 @@ class VideoProcessor:
                     audio_boost = audio_energy[energy_idx]
                     scene_scores[i] = (timestamp, score * (0.7 + 0.3 * audio_boost))
 
-        # Sort by score descending
-        scene_scores.sort(key=lambda x: x[1], reverse=True)
-
-        # Greedy selection to build highlights list
-        highlights: List[Dict] = []
-        total_time = 0.0
-
+        # Build candidate clips for narrative sequencing (beginning/middle/end)
+        clip_candidates: List[Dict] = []
+        video_duration = (total_frames / fps) if fps > 0 else 0.0
         for timestamp, score in scene_scores:
+            next_times = [s for s in scenes if s > timestamp]
+            next_time = next_times[0] if next_times else min(video_duration, timestamp + 5.0)
+            clip_duration = max(0.0, next_time - timestamp)
+            if clip_duration >= min_clip_duration:
+                clip_candidates.append({
+                    "start": float(timestamp),
+                    "end": float(timestamp + clip_duration),
+                    "score": float(score),
+                })
+
+        if not clip_candidates:
+            return []
+
+        thirds = [video_duration / 3.0, 2.0 * video_duration / 3.0]
+        def _phase(ts: float) -> str:
+            if ts < thirds[0]:
+                return "beginning"
+            if ts < thirds[1]:
+                return "middle"
+            return "end"
+
+        for c in clip_candidates:
+            c["phase"] = _phase(c["start"])
+
+        # Pick strongest from each phase first, then backfill by score.
+        highlights: List[Dict] = []
+        used = set()
+        total_time = 0.0
+        for phase in ("beginning", "middle", "end"):
+            phase_clips = [c for c in clip_candidates if c["phase"] == phase]
+            if not phase_clips:
+                continue
+            best = max(phase_clips, key=lambda c: c["score"])
+            dur = min(best["end"] - best["start"], target_duration - total_time)
+            if dur >= min_clip_duration and total_time + dur <= target_duration:
+                key = (best["start"], best["end"])
+                used.add(key)
+                highlights.append({
+                    "start": round(best["start"], 2),
+                    "end": round(best["start"] + dur, 2),
+                    "score": round(best["score"], 4),
+                    "phase": phase,
+                    "pace_hint": "establish" if phase == "beginning" else ("build" if phase == "middle" else "payoff"),
+                })
+                total_time += dur
+
+        remaining = sorted(clip_candidates, key=lambda c: c["score"], reverse=True)
+        for c in remaining:
             if total_time + min_clip_duration > target_duration:
                 break
-
-            # Find next scene boundary
-            next_times = [s for s in scenes if s > timestamp]
-            next_time = next_times[0] if next_times else timestamp + 5.0
-            clip_duration = min(next_time - timestamp, target_duration - total_time)
-
-            if clip_duration >= min_clip_duration:
+            key = (c["start"], c["end"])
+            if key in used:
+                continue
+            dur = min(c["end"] - c["start"], target_duration - total_time)
+            if dur >= min_clip_duration:
                 highlights.append({
-                    "start": round(timestamp, 2),
-                    "end":   round(timestamp + clip_duration, 2),
-                    "score": round(score, 4),
+                    "start": round(c["start"], 2),
+                    "end": round(c["start"] + dur, 2),
+                    "score": round(c["score"], 4),
+                    "phase": c["phase"],
+                    "pace_hint": "bridge",
                 })
-                total_time += clip_duration
+                total_time += dur
 
         # Ensure at least one clip (take from highest scored scene)
-        if not highlights and scene_scores:
-            ts, score = scene_scores[0]
+        if not highlights and clip_candidates:
+            best = max(clip_candidates, key=lambda c: c["score"])
             highlights.append({
-                "start": round(ts, 2),
-                "end":   round(ts + min(target_duration, 5.0), 2),
-                "score": round(score, 4),
+                "start": round(best["start"], 2),
+                "end": round(best["start"] + min(target_duration, 5.0), 2),
+                "score": round(best["score"], 4),
+                "phase": best["phase"],
+                "pace_hint": "single_peak",
             })
 
         # Sort by start time for narrative order (beginning → end)

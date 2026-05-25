@@ -1543,6 +1543,15 @@ async def regenerate_captions(
             result["reel"] = gen.generate_reel_caption(event_name, assets, event_description)
         if platform in ("stories", "all"):
             result["stories"] = gen.generate_story_captions(event_name, 4, assets, event_description)
+        result["voice_qa"] = {}
+        for key in ("linkedin", "instagram", "reel"):
+            if key in result and isinstance(result[key], str):
+                result["voice_qa"][key] = gen.evaluate_stepone_tone(result[key])
+        if "stories" in result and isinstance(result["stories"], list):
+            story_scores = [gen.evaluate_stepone_tone(s) for s in result["stories"] if isinstance(s, str)]
+            if story_scores:
+                avg = round(sum(s["score"] for s in story_scores) / len(story_scores), 3)
+                result["voice_qa"]["stories"] = {"avg_score": avg, "frames": story_scores}
     except Exception as e:
         logger.error(f"Caption regeneration failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

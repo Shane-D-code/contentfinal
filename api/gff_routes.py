@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import List
+import math
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -313,3 +314,69 @@ async def get_brand_content(brand_id: str, output_root: str = "output", event_na
 async def get_selection_logic():
     from content_engine.brand.selection_logic import SELECTION_LOGIC
     return {"selection_logic": SELECTION_LOGIC}
+
+
+@router.get("/brand-clusters")
+async def get_brand_clusters(output_root: str = "output", event_name: str = "GFF_2025", min_confidence: float = 0.0):
+    """
+    Return a 2D cluster projection for brand assignments using similarity vectors
+    from selection_report.json. Designed for presentation-day visualization.
+    """
+    import re
+    safe_event = re.sub(r"[^\w\-]", "_", event_name).strip("_")
+    report_path = Path(output_root) / safe_event / "selection_report.json"
+    if not report_path.exists():
+        raise HTTPException(404, f"selection_report.json not found for event: {event_name}")
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    all_points = []
+    brand_centroids = {}
+
+    for brand_id, payload in report.get("brands", {}).items():
+        for item in payload.get("assets", []):
+            conf = float(item.get("confidence", 0.0) or 0.0)
+            if conf < min_confidence:
+                continue
+            sims = item.get("similarity_scores", {}) or {}
+            if not sims:
+                continue
+            # deterministic 2D projection from similarities:
+            # x = top1 - top2 margin, y = confidence spread (stddev-like)
+            vals = sorted([float(v) for v in sims.values()], reverse=True)
+            top1 = vals[0]
+            top2 = vals[1] if len(vals) > 1 else 0.0
+            mean = sum(vals) / len(vals)
+            var = sum((v - mean) ** 2 for v in vals) / len(vals)
+            x = round(top1 - top2, 4)
+            y = round(math.sqrt(var), 4)
+            point = {
+                "path": item.get("path"),
+                "brand_id": brand_id,
+                "confidence": conf,
+                "x": x,
+                "y": y,
+                "similarity_scores": sims,
+                "confidence_band": item.get("confidence_band", "unknown"),
+                "margin_to_second": item.get("margin_to_second", round(x, 4)),
+            }
+            all_points.append(point)
+
+    # compute brand centroids
+    by_brand = {}
+    for p in all_points:
+        by_brand.setdefault(p["brand_id"], []).append(p)
+    for bid, pts in by_brand.items():
+        brand_centroids[bid] = {
+            "x": round(sum(p["x"] for p in pts) / len(pts), 4),
+            "y": round(sum(p["y"] for p in pts) / len(pts), 4),
+            "count": len(pts),
+            "avg_confidence": round(sum(p["confidence"] for p in pts) / len(pts), 4),
+        }
+
+    return {
+        "event_name": report.get("event_name", event_name),
+        "total_points": len(all_points),
+        "points": all_points,
+        "centroids": brand_centroids,
+        "filters": {"min_confidence": min_confidence},
+    }

@@ -88,6 +88,32 @@ export interface RegenerateResult {
   stories?: string[]
 }
 
+export interface BrandClusterPoint {
+  path: string
+  brand_id: string
+  confidence: number
+  x: number
+  y: number
+  similarity_scores: Record<string, number>
+  confidence_band: string
+  margin_to_second: number
+}
+
+export interface BrandClusterCentroid {
+  x: number
+  y: number
+  count: number
+  avg_confidence: number
+}
+
+export interface BrandClustersResponse {
+  event_name: string
+  total_points: number
+  points: BrandClusterPoint[]
+  centroids: Record<string, BrandClusterCentroid>
+  filters: { min_confidence: number }
+}
+
 export const regenerateCaptions = (opts: RegenerateOptions): Promise<RegenerateResult> => {
   const f = new FormData()
   f.append('event_name',        opts.eventName)
@@ -97,6 +123,11 @@ export const regenerateCaptions = (opts: RegenerateOptions): Promise<RegenerateR
   f.append('face_count',        String(opts.faceCount ?? 0))
   return api.post<RegenerateResult>('/api/captions/regenerate', f).then(r => r.data)
 }
+
+export const getBrandClusters = (eventName: string, minConfidence = 0) =>
+  api.get<BrandClustersResponse>('/api/gff/brand-clusters', {
+    params: { event_name: eventName, min_confidence: minConfidence },
+  }).then(r => r.data)
 
 // New types for asset selection
 export interface CategorizedAsset {

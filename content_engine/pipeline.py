@@ -221,7 +221,10 @@ class ContentEngine:
         if image_paths:
             cal = self.quality_assessor.calibrate_batch(image_paths)
             if cal.get("calibrated"):
-                _log.info("thresholds_calibrated", **{k: v for k, v in cal.items() if k != "calibrated"})
+                _log.info(
+                    "thresholds_calibrated",
+                    **{k: v for k, v in cal.items() if k not in {"calibrated", "event"}},
+                )
 
         all_assets: List[AssetMetadata] = []
         for path in asset_list:

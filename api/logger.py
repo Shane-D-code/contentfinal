@@ -24,6 +24,50 @@ import structlog
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 
+def sanitize_log_kwargs(kwargs: dict) -> dict:
+    """
+    Remove structlog-reserved keys from metadata kwargs.
+    The positional message is already the `event` field in structlog.
+    """
+    if not kwargs:
+        return kwargs
+    if "event" in kwargs:
+        kwargs = dict(kwargs)
+        kwargs.pop("event", None)
+    return kwargs
+
+
+class SafeBoundLogger(structlog.stdlib.BoundLogger):
+    """
+    Defensive BoundLogger that strips reserved `event` kwarg from:
+      - bind/new context
+      - regular log method kwargs
+    This prevents runtime collisions like:
+      meth() got multiple values for argument 'event'
+    """
+
+    def bind(self, **new_values):
+        return super().bind(**sanitize_log_kwargs(new_values))
+
+    def new(self, **new_values):
+        return super().new(**sanitize_log_kwargs(new_values))
+
+    def debug(self, event=None, *args, **kw):
+        return super().debug(event, *args, **sanitize_log_kwargs(kw))
+
+    def info(self, event=None, *args, **kw):
+        return super().info(event, *args, **sanitize_log_kwargs(kw))
+
+    def warning(self, event=None, *args, **kw):
+        return super().warning(event, *args, **sanitize_log_kwargs(kw))
+
+    def error(self, event=None, *args, **kw):
+        return super().error(event, *args, **sanitize_log_kwargs(kw))
+
+    def exception(self, event=None, *args, **kw):
+        return super().exception(event, *args, **sanitize_log_kwargs(kw))
+
+
 def get_request_id() -> str:
     return request_id_var.get() or str(uuid.uuid4())[:8]
 
@@ -65,7 +109,7 @@ def setup_logging(log_level: str = "INFO", json_output: bool = True) -> None:
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
+        wrapper_class=SafeBoundLogger,
         cache_logger_on_first_use=True,
     )
 
