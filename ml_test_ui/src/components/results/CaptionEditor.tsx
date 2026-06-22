@@ -3,7 +3,7 @@
  * readability score, copy button, and A/B variant tabs.
  */
 import { useState } from 'react'
-import { Copy, Check } from 'lucide-react'
+import { AlertTriangle, Copy, Check, XCircle } from 'lucide-react'
 import { charCount, readabilityGrade } from '../../lib/formatters'
 import { PLATFORM_LIMITS } from '../../lib/constants'
 
@@ -97,8 +97,8 @@ export default function CaptionEditor({ value, onChange, platform, variants = []
         </span>
         <span>{words} words</span>
         <span>Grade {Math.max(1, grade)} readability</span>
-        {nearLimit && <span style={{ color: 'var(--yellow)' }}>⚠ Suggest &lt;{limits.suggestChars} for best reach</span>}
-        {overLimit && <span style={{ color: 'var(--red)' }}>✗ Over platform limit</span>}
+        {nearLimit && <span style={{ color: 'var(--yellow)', display: 'inline-flex', alignItems: 'center', gap: 4 }}><AlertTriangle size={12} /> Suggest &lt;{limits.suggestChars} for best reach</span>}
+        {overLimit && <span style={{ color: 'var(--red)', display: 'inline-flex', alignItems: 'center', gap: 4 }}><XCircle size={12} /> Over platform limit</span>}
       </div>
     </div>
   )

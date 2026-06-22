@@ -3,7 +3,7 @@
  * (browser ZIP requires JSZip; we use sequential downloads as fallback).
  */
 import { useState } from 'react'
-import { Package } from 'lucide-react'
+import { Check, Package } from 'lucide-react'
 import { Spinner } from '../ui'
 
 interface Props {
@@ -48,8 +48,8 @@ export default function BulkDownload({ files }: Props) {
         color: downloading ? 'var(--t3)' : '#fff', fontSize: 13, fontWeight: 600, transition: 'all .2s',
       }}
     >
-      {downloading ? <Spinner size={15} color="#fff" /> : done ? '✓' : <Package size={15} />}
-      {downloading ? 'Downloading…' : done ? 'Downloaded!' : `Download All (${count} files)`}
+      {downloading ? <Spinner size={15} color="#fff" /> : done ? <Check size={15} /> : <Package size={15} />}
+      {downloading ? 'Downloading...' : done ? 'Downloaded' : `Download All (${count} files)`}
     </button>
   )
 }

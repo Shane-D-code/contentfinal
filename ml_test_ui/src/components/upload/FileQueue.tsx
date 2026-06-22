@@ -28,8 +28,8 @@ export default function FileQueue({ files, onRemove }: Props) {
       {/* Summary row */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <span style={{ fontSize: 12, color: 'var(--t2)', fontWeight: 600 }}>{files.length} files queued</span>
-        {images > 0 && <span style={{ fontSize: 11, background: '#1e3a5f', color: '#60a5fa', borderRadius: 5, padding: '2px 8px' }}>📷 {images} images</span>}
-        {videos > 0 && <span style={{ fontSize: 11, background: '#3b1f5e', color: '#c084fc', borderRadius: 5, padding: '2px 8px' }}>🎬 {videos} videos</span>}
+        {images > 0 && <span style={{ fontSize: 11, background: '#1e3a5f', color: '#60a5fa', borderRadius: 5, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Image size={11} /> {images} images</span>}
+        {videos > 0 && <span style={{ fontSize: 11, background: '#3b1f5e', color: '#c084fc', borderRadius: 5, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Film size={11} /> {videos} videos</span>}
       </div>
 
       {/* File list */}

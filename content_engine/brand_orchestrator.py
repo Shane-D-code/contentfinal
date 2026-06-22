@@ -424,7 +424,7 @@ Event: {self.event_name}
 
 ---
 
-{language_doc}
+{logic_doc}
 
 ---
 
@@ -474,10 +474,6 @@ All copy follows StepOne's brand voice:
 
 Language to use: insight-driven, experience-led, measurable impact, experiential intelligence
 Language to avoid: creative agency, event management, event solutions, "we work hard to try to"
-
----
-
-{language_doc}
 """
         (output_dir / "selection_logic.md").write_text(full_doc, encoding="utf-8")
         _log.info("selection_logic_saved")

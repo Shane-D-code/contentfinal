@@ -1,0 +1,18 @@
+[
+  {
+    "file": "download.jpg",
+    "asset_type": "image",
+    "intended_use": "collage",
+    "confidence": 0.3672,
+    "low_confidence": true,
+    "selection_reason": "Selected by user",
+    "scores": {
+      "quality": 0.8185,
+      "aesthetic": 0.5009,
+      "final": 0.3672
+    },
+    "face_count": 1,
+    "scene_concepts": [],
+    "highlight_clips": []
+  }
+]

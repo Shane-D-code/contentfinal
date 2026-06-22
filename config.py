@@ -84,10 +84,27 @@ class Settings:
         # ── Allowed MIME types ────────────────────────────────────────────────
         self.allowed_image_types: List[str] = [
             "image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff",
+            "image/gif", "image/heic", "image/heif", "image/avif",
+            "image/x-ms-bmp", "image/x-canon-cr2", "image/x-canon-cr3",
+            "image/x-nikon-nef", "image/x-sony-arw", "image/x-adobe-dng",
         ]
         self.allowed_video_types: List[str] = [
             "video/mp4", "video/quicktime", "video/x-msvideo",
             "video/x-matroska", "video/webm",
+            "video/x-ms-wmv", "video/x-flv", "video/mpeg",
+            "video/3gpp", "video/3gpp2", "video/ogg", "video/mp2t",
+            "video/x-m4v", "video/x-ms-asf", "video/x-ms-wm",
+            "video/dv", "video/x-dv",
+        ]
+        self.allowed_image_extensions: List[str] = [
+            ".jpg", ".jpeg", ".jpe", ".png", ".webp", ".bmp", ".dib",
+            ".tif", ".tiff", ".gif", ".heic", ".heif", ".avif", ".jfif",
+        ]
+        self.allowed_video_extensions: List[str] = [
+            ".mp4", ".mov", ".qt", ".avi", ".mkv", ".webm", ".m4v",
+            ".wmv", ".flv", ".f4v", ".mpg", ".mpeg", ".mpe", ".m2v",
+            ".m2ts", ".mts", ".ts", ".3gp", ".3g2", ".ogv", ".asf",
+            ".divx", ".dv", ".vob",
         ]
 
     # ── Derived properties ────────────────────────────────────────────────────
@@ -98,6 +115,10 @@ class Settings:
     @property
     def allowed_mime_types(self) -> List[str]:
         return self.allowed_image_types + self.allowed_video_types
+
+    @property
+    def allowed_upload_extensions(self) -> List[str]:
+        return self.allowed_image_extensions + self.allowed_video_extensions
 
 
 settings = Settings()

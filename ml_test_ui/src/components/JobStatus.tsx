@@ -2,7 +2,7 @@
  * JobStatus — shows live progress for an async job.
  * Displays a progress bar, current step, and backend indicator.
  */
-import { CheckCircle, XCircle, Loader } from 'lucide-react'
+import { CheckCircle, XCircle, Loader, RefreshCw, Zap } from 'lucide-react'
 import { useJobPolling } from '../hooks/useJobPolling'
 import type { JobStatus as JobStatusType } from '../api'
 
@@ -51,8 +51,9 @@ export default function JobStatus({ jobId, onComplete, onError }: Props) {
           {failed ? 'Job failed' : done ? 'Complete' : label}
         </span>
         {status?.backend && (
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', background: 'var(--s2)', borderRadius: 5, padding: '2px 8px' }}>
-            {status.backend === 'celery' ? '⚡ Celery' : '🔄 In-process'}
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', background: 'var(--s2)', borderRadius: 5, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {status.backend === 'celery' ? <Zap size={11} /> : <RefreshCw size={11} />}
+            {status.backend === 'celery' ? 'Celery' : 'In-process'}
           </span>
         )}
       </div>

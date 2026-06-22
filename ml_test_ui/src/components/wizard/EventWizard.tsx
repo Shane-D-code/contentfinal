@@ -3,8 +3,8 @@
  * Step 1: Event name  |  Step 2: Event type
  * Step 3: Platforms   |  Step 4: Brand voice + review
  */
-import { useState } from 'react'
-import { ChevronRight, ChevronLeft, Zap } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { BriefcaseBusiness, ChevronRight, ChevronLeft, Film, Image, Smartphone, Zap } from 'lucide-react'
 import StepIndicator from './StepIndicator'
 import BrandVoiceSlider from './BrandVoiceSlider'
 import { Dropdown } from '../ui/Dropdown'
@@ -25,13 +25,26 @@ interface Props {
 }
 
 const PLATFORMS = [
-  { id: 'linkedin',  label: 'LinkedIn',          icon: '💼', desc: 'Collage + professional copy' },
-  { id: 'instagram', label: 'Instagram Carousel', icon: '📸', desc: 'Up to 10 slides' },
-  { id: 'stories',   label: 'Instagram Stories',  icon: '📱', desc: '3–4 vertical frames' },
-  { id: 'reel',      label: 'Instagram Reel',     icon: '🎬', desc: '30–60s highlight video' },
+  { id: 'linkedin',  label: 'LinkedIn',          icon: BriefcaseBusiness, desc: 'Collage + professional copy' },
+  { id: 'instagram', label: 'Instagram Carousel', icon: Image, desc: 'Up to 10 slides' },
+  { id: 'stories',   label: 'Instagram Stories',  icon: Smartphone, desc: '3-4 vertical frames' },
+  { id: 'reel',      label: 'Instagram Reel',     icon: Film, desc: '30-60s highlight video' },
 ]
 
 const STEPS = ['Event', 'Type', 'Platforms', 'Review']
+
+// Auto-detect event type from event name/description
+const detectEventType = (text: string): string => {
+  const lowerText = text.toLowerCase()
+  if (lowerText.includes('award') || lowerText.includes('trophy') || lowerText.includes('winner')) return 'awards'
+  if (lowerText.includes('workshop') || lowerText.includes('training') || lowerText.includes('hands-on')) return 'workshop'
+  if (lowerText.includes('expo') || lowerText.includes('exhibition') || lowerText.includes('trade')) return 'trade_show'
+  if (lowerText.includes('networking') || lowerText.includes('mixer') || lowerText.includes('meetup')) return 'networking'
+  if (lowerText.includes('launch') || lowerText.includes('unveil') || lowerText.includes('product')) return 'product_launch'
+  if (lowerText.includes('corporate') || lowerText.includes('town hall')) return 'corporate'
+  if (lowerText.includes('conference') || lowerText.includes('summit') || lowerText.includes('keynote')) return 'conference'
+  return 'conference' // Default fallback
+}
 
 export default function EventWizard({ initialName = '', onSubmit, loading }: Props) {
   const [step, setStep] = useState(0)
@@ -43,12 +56,25 @@ export default function EventWizard({ initialName = '', onSubmit, loading }: Pro
     brandVoice: 30,
   })
 
-  const update = (patch: Partial<WizardConfig>) => setCfg(c => ({ ...c, ...patch }))
+  const update = useCallback((patch: Partial<WizardConfig>) => setCfg(c => ({ ...c, ...patch })), [])
 
-  const togglePlatform = (id: string) =>
-    update({ platforms: cfg.platforms.includes(id) ? cfg.platforms.filter(p => p !== id) : [...cfg.platforms, id] })
+  const togglePlatform = useCallback((id: string) =>
+    update({ platforms: cfg.platforms.includes(id) ? cfg.platforms.filter(p => p !== id) : [...cfg.platforms, id] }), [cfg.platforms, update])
 
   const canNext = step === 0 ? cfg.eventName.trim().length > 0 : step === 2 ? cfg.platforms.length > 0 : true
+
+  // Auto-detect event type when event name or description changes
+  const handleEventNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const newName = e.target.value
+    const detectedType = detectEventType(newName + ' ' + cfg.eventDesc)
+    update({ eventName: newName, eventType: detectedType })
+  }, [cfg.eventDesc, update])
+
+  const handleDescriptionChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const newDesc = e.target.value
+    const detectedType = detectEventType(cfg.eventName + ' ' + newDesc)
+    update({ eventDesc: newDesc, eventType: detectedType })
+  }, [cfg.eventName, update])
 
   return (
     <div>
@@ -64,7 +90,7 @@ export default function EventWizard({ initialName = '', onSubmit, loading }: Pro
             <input
               autoFocus
               value={cfg.eventName}
-              onChange={e => update({ eventName: e.target.value })}
+              onChange={handleEventNameChange}
               placeholder="e.g. Tech Summit 2024"
               style={{ width: '100%', background: 'var(--s2)', border: `1px solid ${cfg.eventName ? 'var(--accent)' : 'var(--b1)'}`, borderRadius: 'var(--rs)', padding: '12px 16px', color: 'var(--t1)', fontSize: 16, fontWeight: 500, outline: 'none', transition: 'border-color .2s' }}
               onKeyDown={e => { if (e.key === 'Enter' && canNext) setStep(1) }}
@@ -76,11 +102,14 @@ export default function EventWizard({ initialName = '', onSubmit, loading }: Pro
             </label>
             <input
               value={cfg.eventDesc}
-              onChange={e => update({ eventDesc: e.target.value })}
+              onChange={handleDescriptionChange}
               placeholder="Annual tech conference with keynotes and networking…"
               style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: 'var(--rs)', padding: '10px 16px', color: 'var(--t1)', fontSize: 14, outline: 'none' }}
             />
           </div>
+          <p style={{ fontSize: 12, color: 'var(--t3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Zap size={12} style={{ color: 'var(--accent)' }} /> Event type auto-detected as <strong style={{ color: 'var(--a2)' }}>{EVENT_TYPES.find(e => e.value === cfg.eventType)?.label ?? cfg.eventType}</strong>
+          </p>
         </div>
       )}
 
@@ -105,6 +134,7 @@ export default function EventWizard({ initialName = '', onSubmit, loading }: Pro
           <p style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 4 }}>Select which platforms to generate content for:</p>
           {PLATFORMS.map(p => {
             const active = cfg.platforms.includes(p.id)
+            const PlatformIcon = p.icon
             return (
               <button
                 key={p.id}
@@ -116,7 +146,7 @@ export default function EventWizard({ initialName = '', onSubmit, loading }: Pro
                   borderRadius: 'var(--rs)', cursor: 'pointer', textAlign: 'left', transition: 'all .15s',
                 }}
               >
-                <span style={{ fontSize: 22 }}>{p.icon}</span>
+                <PlatformIcon size={22} color={active ? 'var(--a2)' : 'var(--t2)'} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: active ? 'var(--a2)' : 'var(--t1)' }}>{p.label}</div>
                   <div style={{ fontSize: 12, color: 'var(--t3)' }}>{p.desc}</div>

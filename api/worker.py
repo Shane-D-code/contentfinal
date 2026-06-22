@@ -14,6 +14,15 @@ The worker is configured for ML workloads:
   - result_expires=86400 (results kept 24 h in Redis)
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path so `content_engine` and `config`
+# are importable regardless of the working directory Celery starts from.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 from celery import Celery
 from kombu import Exchange, Queue
 from config import settings
@@ -36,6 +45,8 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,         # One task at a time
 
+    # Pool — solo avoids forking, which prevents MPS/torch SIGABRT on Apple Silicon
+    worker_pool="solo",
     # Time limits
     task_time_limit=settings.celery_task_time_limit,
     task_soft_time_limit=settings.celery_task_soft_time_limit,

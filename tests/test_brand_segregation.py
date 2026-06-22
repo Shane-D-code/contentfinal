@@ -3,15 +3,7 @@ Tests for brand segregation functionality.
 """
 
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from dataclasses import dataclass
-
-# Mock torch and clip before importing modules
-import sys
-sys.modules['torch'] = MagicMock()
-sys.modules['clip'] = MagicMock()
-sys.modules['PIL'] = MagicMock()
+from unittest.mock import patch, MagicMock
 
 from content_engine.brand_segregator import (
     BrandSegregator,
@@ -83,8 +75,7 @@ class TestBrandSegregator:
             ("brand_b", "Brand B", ["/path/to/render2.jpg"]),
         ]
         
-        # Mock Path.exists to return True
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(brands=brands)
         
         assert len(segregator.brands) == 2
@@ -99,7 +90,7 @@ class TestBrandSegregator:
             ("brand_c", "Brand C", ["/nonexistent/path.jpg"]),  # Doesn't exist
         ]
         
-        with patch('pathlib.Path.exists', return_value=False):
+        with patch('content_engine.brand_segregator.Path.exists', side_effect=[True, False]):
             segregator = BrandSegregator(brands=brands)
         
         # Only brand_a has a valid path
@@ -112,7 +103,7 @@ class TestBrandSegregator:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(
                 brands=brands,
                 similarity_threshold=0.75,
@@ -126,7 +117,7 @@ class TestBrandSegregator:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(brands=brands)
         
         logic = segregator.get_selection_logic()
@@ -143,7 +134,7 @@ class TestBrandSegregator:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(
                 brands=brands,
                 similarity_threshold=0.65,
@@ -162,9 +153,8 @@ class TestBrandSegregatorClassify:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
-            # Create without CLIP
-            with patch.dict('sys.modules', {'clip': None}):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
+            with patch('content_engine.brand_segregator._CLIP_AVAILABLE', False):
                 segregator = BrandSegregator(brands=brands)
         
         result = segregator.classify_asset("/path/to/image.jpg")
@@ -174,7 +164,7 @@ class TestBrandSegregatorClassify:
 
     def test_classify_with_no_brands_returns_unmatched(self):
         """Test classification returns unmatched when no brands configured."""
-        with patch('pathlib.Path.exists', return_value=False):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=False):
             segregator = BrandSegregator(brands=[])
         
         result = segregator.classify_asset("/path/to/image.jpg")
@@ -192,8 +182,8 @@ class TestBrandSegregatorSegregate:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
-            with patch.dict('sys.modules', {'clip': None}):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
+            with patch('content_engine.brand_segregator._CLIP_AVAILABLE', False):
                 segregator = BrandSegregator(brands=brands)
         
         result = segregator.segregate_assets([])
@@ -210,8 +200,8 @@ class TestBrandSegregatorSegregate:
             ("brand_b", "Brand B", ["/path/to/render2.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
-            with patch.dict('sys.modules', {'clip': None}):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
+            with patch('content_engine.brand_segregator._CLIP_AVAILABLE', False):
                 segregator = BrandSegregator(brands=brands)
         
         result = segregator.segregate_assets(["/path/to/image1.jpg"])
@@ -230,7 +220,7 @@ class TestDefaultThreshold:
         """Test default similarity threshold is 0.60."""
         brands = [("brand", "Brand", ["/path/to/render.jpg"])]
         
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(brands=brands)
         
         assert segregator.DEFAULT_THRESHOLD == 0.60
@@ -239,7 +229,7 @@ class TestDefaultThreshold:
         """Test minimum matching assets constant."""
         brands = [("brand", "Brand", ["/path/to/render.jpg"])]
         
-        with patch('pathlib.Path.exists', return_value=True):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
             segregator = BrandSegregator(brands=brands)
         
         assert segregator.MIN_MATCHING_ASSETS == 5
@@ -257,8 +247,8 @@ class TestSegregatorIntegration:
             ("brand_b", "Brand B", ["/path/to/render_b.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
-            with patch.dict('sys.modules', {'clip': None}):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
+            with patch('content_engine.brand_segregator._CLIP_AVAILABLE', False):
                 segregator = BrandSegregator(brands=brands)
         
         assets = [f"/path/to/image_{i}.jpg" for i in range(5)]
@@ -274,8 +264,8 @@ class TestSegregatorIntegration:
             ("brand_a", "Brand A", ["/path/to/render.jpg"]),
         ]
         
-        with patch('pathlib.Path.exists', return_value=True):
-            with patch.dict('sys.modules', {'clip': None}):
+        with patch('content_engine.brand_segregator.Path.exists', return_value=True):
+            with patch('content_engine.brand_segregator._CLIP_AVAILABLE', False):
                 segregator = BrandSegregator(brands=brands)
         
         result = segregator.segregate_assets(["/any/path.jpg"])

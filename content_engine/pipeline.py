@@ -26,11 +26,11 @@ try:
     from config import settings as _cfg
     _QUALITY_FLOOR = _cfg.quality_min_score
     _FACE_CONF = _cfg.face_confidence_threshold
+    _VIDEO_EXTENSIONS = set(_cfg.allowed_video_extensions)
 except Exception:
     _QUALITY_FLOOR = 0.30
     _FACE_CONF = 0.35
-
-_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 _WEIGHT_QUALITY   = 0.30
 _WEIGHT_AESTHETIC = 0.20
 _WEIGHT_FACES     = 0.30

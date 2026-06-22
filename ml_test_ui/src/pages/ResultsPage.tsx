@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Download, ChevronLeft, FileDown, RefreshCw, Zap } from 'lucide-react'
+import { BarChart3, BriefcaseBusiness, Camera, ChevronLeft, Download, File, FileDown, FileText, Film, Folder, Image, RefreshCw, Smartphone, Tag as TagIcon, Zap, AlertTriangle } from 'lucide-react'
 import { Card, Btn, Tag } from '../components/ui'
 import { LinkedInPreview, InstagramCarousel, InstagramStories, InstagramReel } from '../components/PlatformPreview'
 import CaptionEditor from '../components/results/CaptionEditor'
@@ -19,17 +19,16 @@ function Thumb({ url }: { url: string }) {
   return <img src={url} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
 }
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'linkedin',  label: 'LinkedIn',   icon: '💼' },
-  { id: 'instagram', label: 'Instagram',  icon: '📸' },
-  { id: 'stories',   label: 'Stories',    icon: '📱' },
-  { id: 'reel',      label: 'Reel',       icon: '🎬' },
-  { id: 'casestudy', label: 'Case Study', icon: '📄' },
-  { id: 'report',    label: 'AI Report',  icon: '📊' },
+const TABS = [
+  { id: 'linkedin' as const,  label: 'LinkedIn',   icon: BriefcaseBusiness },
+  { id: 'instagram' as const, label: 'Instagram',  icon: Camera },
+  { id: 'stories' as const,   label: 'Stories',    icon: Smartphone },
+  { id: 'reel' as const,      label: 'Reel',       icon: Film },
+  { id: 'casestudy' as const, label: 'Case Study', icon: FileText },
+  { id: 'report' as const,    label: 'AI Report',  icon: BarChart3 },
 ]
 
 export default function ResultsPage({ result, eventName, onBack }: Props) {
-  const [tab, setTab] = useState<Tab>('linkedin')
   const { trackEvent } = useAnalytics()
   const isMobile = useIsMobile()
   const [regenLoading, setRegenLoading] = useState(false)
@@ -38,26 +37,57 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
   const files: Record<string, string>    = result?.files    ?? {}
   const captions: Record<string, string> = result?.captions ?? {}
   const fileNames = Object.keys(files)
+  const isBrandMode = result?.mode === 'gff'
+  const brandCounts: Record<string, number> = result?.brand_counts ?? {}
+  const brandIds = Object.keys(brandCounts)
+  const initialBrandId = result?.selected_brand && brandIds.includes(result.selected_brand)
+    ? result.selected_brand
+    : brandIds[0] ?? ''
+  const [tab, setTab] = useState<Tab>('linkedin')
+  const [activeBrandId, setActiveBrandId] = useState(initialBrandId)
+  const activeFileNames = isBrandMode && activeBrandId
+    ? fileNames.filter(n => n.startsWith(`${activeBrandId}/`))
+    : fileNames
 
-  const getUrl  = (pat: RegExp) => { const k = fileNames.find(n => pat.test(n)); return k ? files[k] : undefined }
-  const getUrls = (pat: RegExp) => fileNames.filter(n => pat.test(n)).sort().map(n => files[n])
+  const getUrl  = (pat: RegExp) => { const k = activeFileNames.find(n => pat.test(n)); return k ? files[k] : undefined }
+  const getUrls = (pat: RegExp) => activeFileNames.filter(n => pat.test(n)).sort().map(n => files[n])
+  const caption = (key: string) => {
+    if (isBrandMode && activeBrandId) {
+      return captions[`${activeBrandId}__${key}`] || captions[key] || ''
+    }
+    return captions[key] || ''
+  }
 
   const collageUrl   = getUrl(/linkedin_collage/)
-  const carouselUrls = getUrls(/instagram_carousel_\d+/)
-  const reelUrl      = getUrl(/instagram_reel\.mp4/)
-  const storyUrls    = getUrls(/instagram_story_\d+/)
+  const carouselUrls = getUrls(/(?:instagram_carousel_\d+|carousel_\d+)/)
+  const reelUrl      = getUrl(/(?:instagram_reel|reel)\.mp4$/)
+  const storyUrls    = getUrls(/(?:instagram_story_\d+|story_\d+)/)
 
-  const [liCaption,   setLiCaption]   = useState(captions['linkedin_caption']       || `Just wrapped ${eventName} — here's what stood out.\n\nThe energy in the room was electric.\n\nWhat's your biggest takeaway from recent events?\n\n#${eventName.replace(/\s+/g, '')} #EventInsights`)
-  const [igCaption,   setIgCaption]   = useState(captions['instagram_caption']      || `POV: You attend ${eventName} and forget to eat 😅\n\nSwipe for the moments that didn't make the recap →\n\n#${eventName.replace(/\s+/g, '')} #EventLife`)
-  const [reelCaption, setReelCaption] = useState(captions['instagram_reel_caption'] || `24 hours at ${eventName} 🎬\n\nTag someone who needs to be in the room next year 👇\n\n#${eventName.replace(/\s+/g, '')}`)
-  const [storyCaps]                   = useState<string[]>(() => {
-    const raw = captions['story_captions'] || ''
+  const [liCaption,   setLiCaption]   = useState(caption('linkedin_caption') || caption('instagram_caption') || `Just wrapped ${eventName} — here's what stood out.\n\nThe energy in the room was electric.\n\nWhat's your biggest takeaway from recent events?\n\n#${eventName.replace(/\s+/g, '')} #EventInsights`)
+  const [igCaption,   setIgCaption]   = useState(caption('instagram_caption') || `POV: You attend ${eventName} and forget to eat.\n\nSwipe for the moments that did not make the recap.\n\n#${eventName.replace(/\s+/g, '')} #EventLife`)
+  const [reelCaption, setReelCaption] = useState(caption('instagram_reel_caption') || caption('reel_caption') || `24 hours at ${eventName}.\n\nTag someone who needs to be in the room next year.\n\n#${eventName.replace(/\s+/g, '')}`)
+  const [storyCaps, setStoryCaps]     = useState<string[]>(() => {
+    const raw = caption('story_captions') || caption('stories__story_captions') || ''
     if (raw) {
       const lines = raw.split('\n').filter(Boolean).map((l: string) => l.replace(/^Story \d+:\s*/i, '').trim()).filter(Boolean)
       if (lines.length) return lines
     }
-    return [`We're at ${eventName} ✨`, 'The main stage 👀', 'Best moment of the day 🎯', 'See you next year 👋']
+    return [`We are at ${eventName}`, 'The main stage', 'Best moment of the day', 'See you next year']
   })
+
+  useEffect(() => {
+    if (!isBrandMode) return
+    setLiCaption(caption('linkedin_caption') || caption('instagram_caption') || '')
+    setIgCaption(caption('instagram_caption') || '')
+    setReelCaption(caption('instagram_reel_caption') || caption('reel_caption') || '')
+    const rawStories = caption('story_captions') || caption('stories__story_captions') || ''
+    const nextStories = rawStories
+      .split('\n')
+      .filter(Boolean)
+      .map((line: string) => line.replace(/^Story \d+:\s*/i, '').trim())
+      .filter(Boolean)
+    setStoryCaps(nextStories.length ? nextStories : [`${activeBrandId.replace(/_/g, ' ')} at ${eventName}`])
+  }, [activeBrandId])
 
   const dl = (webUrl: string, filename: string) => {
     const a = document.createElement('a')
@@ -86,7 +116,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
       if (platform === 'instagram'  && r.instagram)  setIgCaption(r.instagram)
       if (platform === 'reel'       && r.reel)        setReelCaption(r.reel)
       toast.dismiss(loadId)
-      const label = r.backend === 'groq' ? '⚡ Groq AI' : '📝 Template'
+      const label = r.backend === 'groq' ? 'Groq AI' : 'Template'
       toast.success(`Caption regenerated (${label})`)
       trackEvent({ type: 'regen', platform })
     } catch (e: any) {
@@ -106,23 +136,68 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}
+        style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 28, flexWrap: 'wrap' }}
       >
-        <button
-          onClick={onBack}
-          aria-label="Back to Studio"
-          style={{ background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: 'var(--rs)', padding: '8px 14px', color: 'var(--t2)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}
-        >
-          <ChevronLeft size={15} /> New Event
-        </button>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700 }}>{eventName}</h1>
-          <p style={{ fontSize: 13, color: 'var(--t2)' }}>{fileNames.length} files generated</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <button
+            onClick={onBack}
+            aria-label="Back to Studio"
+            style={{ background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: 'var(--rs)', padding: '8px 14px', color: 'var(--t2)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}
+          >
+            <ChevronLeft size={15} /> New Event
+          </button>
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 700 }}>{eventName}</h1>
+            <p style={{ fontSize: 13, color: 'var(--t2)' }}>{fileNames.length} files generated</p>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Tag label="Generation complete" color="var(--green)" />
+            <BulkDownload files={files} />
+          </div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Tag label="✅ Generation complete" color="var(--green)" />
-          <BulkDownload files={files} />
-        </div>
+
+        {isBrandMode && brandIds.length > 0 && (
+          <Card style={{ padding: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--t3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em' }}>Brand outputs</span>
+              {brandIds.map(id => (
+                <button
+                  key={id}
+                  onClick={() => setActiveBrandId(id)}
+                  style={{
+                    border: `1px solid ${activeBrandId === id ? 'var(--accent)' : 'var(--b1)'}`,
+                    background: activeBrandId === id ? 'rgba(124,106,255,.15)' : 'var(--s2)',
+                    color: activeBrandId === id ? 'var(--a2)' : 'var(--t2)',
+                    borderRadius: 8,
+                    padding: '7px 10px',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {id.replace(/_/g, ' ')} · {brandCounts[id]} photos
+                </button>
+              ))}
+              {typeof result?.unmatched_count === 'number' && (
+                <Tag label={`${result.unmatched_count} unmatched`} color="var(--yellow)" />
+              )}
+            </div>
+          </Card>
+        )}
+        
+        {/* Selected Layouts Info */}
+        {!isBrandMode && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <p style={{ fontSize: 12, color: 'var(--t3)', margin: 0 }}>Selected Layouts:</p>
+          {result.linkedin_layout && (
+            <Tag label={`LinkedIn: ${result.linkedin_layout}`} color="var(--accent)" />
+          )}
+          {result.story_layout && (
+            <Tag label={`Stories: ${result.story_layout}`} color="var(--accent)" />
+          )}
+          {result.reel_layout && (
+            <Tag label={`Reel: ${result.reel_layout}`} color="var(--accent)" />
+          )}
+        </div>}
       </motion.div>
 
       {/* Tab bar */}
@@ -131,7 +206,9 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
         aria-label="Content platforms"
         style={{ display: 'flex', gap: 4, marginBottom: 28, background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 'var(--r)', padding: 5, overflowX: 'auto' }}
       >
-        {TABS.map(t => (
+        {TABS.map(t => {
+          const TabIcon = t.icon
+          return (
           <button
             key={t.id}
             role="tab"
@@ -145,9 +222,9 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
               whiteSpace: 'nowrap',
             }}
           >
-            {t.icon} {!isMobile && t.label}
+            <TabIcon size={16} /> {!isMobile && t.label}
           </button>
-        ))}
+        )})}
       </div>
 
       {/* Tab content */}
@@ -165,7 +242,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 24, alignItems: 'start' }}>
               <div>
                 <p style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>Live Preview</p>
-                <LinkedInPreview images={collageUrl ? [collageUrl] : carouselUrls.slice(0, 6)} caption={liCaption} name={eventName} />
+                <LinkedInPreview images={collageUrl ? [collageUrl] : carouselUrls.slice(0, 6)} caption={liCaption} name={isBrandMode ? activeBrandId.replace(/_/g, ' ') : eventName} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <Card>
@@ -180,22 +257,22 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
                     </Btn>
                   </div>
                   {groqBackend && <p style={{ fontSize: 10, color: 'var(--t3)', marginTop: 6 }}>
-                    Last generated by: {groqBackend === 'groq' ? '⚡ Groq (llama-3.3-70b)' : '📝 Template'}
+                    Last generated by: {groqBackend === 'groq' ? 'Groq (llama-3.3-70b)' : 'Template'}
                   </p>}
                 </Card>
                 <Card>
                   <SocialShareButtons platform="linkedin" caption={liCaption} />
                 </Card>
-                {collageUrl && (
+                {(collageUrl || carouselUrls[0]) && (
                   <Card>
                     <p style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>Download</p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 14px' }}>
-                      <div style={{ width: 56, height: 56, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}><Thumb url={collageUrl} /></div>
+                      <div style={{ width: 56, height: 56, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}><Thumb url={collageUrl || carouselUrls[0]} /></div>
                       <div style={{ flex: 1 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500 }}>LinkedIn Collage</p>
+                        <p style={{ fontSize: 13, fontWeight: 500 }}>{isBrandMode ? 'Brand hero slide' : 'LinkedIn Collage'}</p>
                         <p style={{ fontSize: 11, color: 'var(--t3)' }}>1080×1080 JPEG</p>
                       </div>
-                      <Btn size="sm" onClick={() => dl(collageUrl, 'linkedin_collage.jpg')}><Download size={13} /> Download</Btn>
+                      <Btn size="sm" onClick={() => dl(collageUrl || carouselUrls[0], isBrandMode ? `${activeBrandId}_hero.jpg` : 'linkedin_collage.jpg')}><Download size={13} /> Download</Btn>
                     </div>
                   </Card>
                 )}
@@ -223,7 +300,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
                     </Btn>
                   </div>
                   {groqBackend && <p style={{ fontSize: 10, color: 'var(--t3)', marginTop: 6 }}>
-                    Last generated by: {groqBackend === 'groq' ? '⚡ Groq (llama-3.3-70b)' : '📝 Template'}
+                    Last generated by: {groqBackend === 'groq' ? 'Groq (llama-3.3-70b)' : 'Template'}
                   </p>}
                 </Card>
                 <Card>
@@ -308,7 +385,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
                 {reelUrl
                   ? <Card>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 14px' }}>
-                        <span style={{ fontSize: 20 }}>🎬</span>
+                        <Film size={20} />
                         <div style={{ flex: 1 }}>
                           <p style={{ fontSize: 13, fontWeight: 500 }}>instagram_reel.mp4</p>
                           <p style={{ fontSize: 11, color: 'var(--t3)' }}>1080×1920 · H.264</p>
@@ -317,7 +394,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
                       </div>
                     </Card>
                   : <Card style={{ borderColor: 'var(--yellow)', background: 'rgba(245,158,11,.05)' }}>
-                      <p style={{ fontSize: 13, color: '#fde68a' }}>⚠ No video assets uploaded. Add MP4/MOV files to generate a Reel.</p>
+                      <p style={{ fontSize: 13, color: '#fde68a', display: 'flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={14} /> No video assets uploaded. Add MP4/MOV files to generate a Reel.</p>
                     </Card>
                 }
               </div>
@@ -342,7 +419,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
               </div>
               <Card>
                 <pre style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: 'var(--t2)', lineHeight: 1.8, whiteSpace: 'pre-wrap', maxHeight: 600, overflowY: 'auto' }}>
-                  {captions['case_study'] || `# Case Study: ${eventName}\n\nGenerated by Content & Design Engine.\nDownload the .md file to view the full document.`}
+                  {caption('case_study') || `# Case Study: ${eventName}\n\nGenerated by Content & Design Engine.\nDownload the .md file to view the full document.`}
                 </pre>
               </Card>
             </div>
@@ -359,17 +436,18 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
               {/* Stats */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 12, marginBottom: 24 }}>
                 {[
-                  { label: 'Files Generated', value: fileNames.length,    icon: '📁' },
-                  { label: 'Carousel Slides', value: carouselUrls.length, icon: '🖼️' },
-                  { label: 'Story Frames',    value: storyUrls.length,    icon: '📱' },
-                  { label: 'Has Reel',        value: reelUrl ? 'Yes' : 'No', icon: '🎬' },
-                ].map(({ label, value, icon }) => (
+                  { label: 'Files Generated', value: fileNames.length,    icon: Folder },
+                  { label: 'Carousel Slides', value: carouselUrls.length, icon: Image },
+                  { label: 'Story Frames',    value: storyUrls.length,    icon: Smartphone },
+                  { label: 'Has Reel',        value: reelUrl ? 'Yes' : 'No', icon: Film },
+                  ...(isBrandMode ? [{ label: 'Brands Matched', value: brandIds.length, icon: TagIcon }] : []),
+                ].map(({ label, value, icon: StatIcon }) => (
                   <motion.div
                     key={label}
                     whileHover={{ y: -2 }}
                     style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 'var(--r)', padding: 16, textAlign: 'center' }}
                   >
-                    <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+                    <div style={{ marginBottom: 8, color: 'var(--a2)' }}><StatIcon size={28} /></div>
                     <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--a2)' }}>{value}</div>
                     <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 4 }}>{label}</div>
                   </motion.div>
@@ -388,7 +466,7 @@ export default function ResultsPage({ result, eventName, onBack }: Props) {
                       <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '9px 14px' }}>
                         {isImg
                           ? <div style={{ width: 36, height: 36, borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}><Thumb url={files[name]} /></div>
-                          : <span style={{ fontSize: 16 }}>{isVid ? '🎬' : '📄'}</span>
+                          : <span style={{ color: 'var(--t2)' }}>{isVid ? <Film size={16} /> : <File size={16} />}</span>
                         }
                         <span style={{ flex: 1, fontSize: 13, color: 'var(--t2)' }}>{name}</span>
                         <span style={{ fontSize: 11, background: isImg ? '#1e3a5f' : isVid ? '#3b1f5e' : '#1a3a2a', color: isImg ? '#60a5fa' : isVid ? '#c084fc' : '#4ade80', borderRadius: 5, padding: '2px 8px', fontWeight: 600 }}>

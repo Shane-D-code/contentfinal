@@ -15,7 +15,10 @@ build/
 # ── Runtime data (never commit uploads or generated output) ──────────────────
 uploads/
 output/
-models/
+# models/ at repo root is cached ML weights — kept excluded
+# content_engine/models/ contains source code — explicitly include it
+!content_engine/models/
+!content_engine/models/*.py
 
 # ── Logs & PIDs ───────────────────────────────────────────────────────────────
 logs/

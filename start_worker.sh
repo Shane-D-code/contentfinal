@@ -28,6 +28,10 @@ fi
 # Activate venv
 [ -d ".venv" ] && source .venv/bin/activate
 
+# Ensure content_engine is importable from any working directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+
 REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CONCURRENCY="${CELERY_WORKER_CONCURRENCY:-1}"

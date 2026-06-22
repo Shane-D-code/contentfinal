@@ -1,3 +1,6 @@
+import { Brain, CheckCircle, FileText, Package, Palette, PenLine, Search, Sparkles } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+
 /** Single source of truth for all hardcoded values */
 
 export const PLATFORM_LIMITS = {
@@ -7,16 +10,16 @@ export const PLATFORM_LIMITS = {
   reel:      { maxImages: 1,  maxChars: 2200, suggestChars: 150,  label: 'Reel' },
 } as const
 
-export const JOB_STEPS: Record<string, { label: string; icon: string; pct: number }> = {
-  queued:            { label: 'Queued',                    icon: '⏳', pct: 2  },
-  loading_models:    { label: 'Loading AI models',         icon: '🧠', pct: 10 },
-  processing_assets: { label: 'Scoring assets',            icon: '🔍', pct: 30 },
-  ml_selection:      { label: 'Selecting best assets',     icon: '✨', pct: 50 },
-  layout_assembly:   { label: 'Assembling layouts',        icon: '🎨', pct: 65 },
-  copy_generation:   { label: 'Writing captions',          icon: '✍️', pct: 80 },
-  case_study:        { label: 'Generating case study',     icon: '📄', pct: 90 },
-  finalising:        { label: 'Finalising outputs',        icon: '📦', pct: 95 },
-  done:              { label: 'Complete',                  icon: '✅', pct: 100 },
+export const JOB_STEPS: Record<string, { label: string; icon: LucideIcon; pct: number }> = {
+  queued:            { label: 'Queued',                    icon: Package, pct: 2  },
+  loading_models:    { label: 'Loading AI models',         icon: Brain, pct: 10 },
+  processing_assets: { label: 'Scoring assets',            icon: Search, pct: 30 },
+  ml_selection:      { label: 'Selecting best assets',     icon: Sparkles, pct: 50 },
+  layout_assembly:   { label: 'Assembling layouts',        icon: Palette, pct: 65 },
+  copy_generation:   { label: 'Writing captions',          icon: PenLine, pct: 80 },
+  case_study:        { label: 'Generating case study',     icon: FileText, pct: 90 },
+  finalising:        { label: 'Finalising outputs',        icon: Package, pct: 95 },
+  done:              { label: 'Complete',                  icon: CheckCircle, pct: 100 },
 }
 
 export const EVENT_TYPES = [

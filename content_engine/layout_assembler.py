@@ -110,32 +110,256 @@ class LayoutAssembler:
 
     # ── LinkedIn collage ──────────────────────────────────────────────────────
 
-    def create_linkedin_collage(self, image_paths: List[str]) -> Image.Image:
+    def create_linkedin_collage(self, image_paths: List[str], layout: str = "hero_right") -> Image.Image:
         """
         Assemble 1–6 images into a 1080×1080 grid collage.
-        Grid layout is chosen automatically based on image count.
+        Layout options: hero_right, hero_left, hero_center, magazine, panoramic, bauhaus, minimal
         A 2-pixel white gutter separates cells.
         """
         n = min(len(image_paths), 6)
         if n == 0:
             raise ValueError("No images provided for collage")
-
-        rows, cols = _GRID_LAYOUTS[n]
         gutter = 2
-        cell_w = (LINKEDIN_SIZE[0] - gutter * (cols - 1)) // cols
-        cell_h = (LINKEDIN_SIZE[1] - gutter * (rows - 1)) // rows
 
-        canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+        # Define different layouts
+        if layout == "hero_right" and n >= 2:
+            # Hero Right: 1 large on right, small on left
+            rows, cols = 2, 2
+            cell_w = (LINKEDIN_SIZE[0] - gutter * (cols - 1)) // cols
+            cell_h = (LINKEDIN_SIZE[1] - gutter * (rows - 1)) // rows
+            
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            
+            # Large cell 1 on right (spans both rows)
+            large_cell = self.smart_crop(image_paths[0], cell_w, cell_h * 2 + gutter)
+            canvas.paste(large_cell, (cell_w + gutter, 0))
+            
+            # Small cells on left
+            for idx, path in enumerate(image_paths[1:3]):
+                row = idx
+                col = 0
+                cell = self.smart_crop(path, cell_w, cell_h)
+                x = col * (cell_w + gutter)
+                y = row * (cell_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+        elif layout == "hero_left" and n >= 2:
+            # Hero Left: 1 large on left, small on right
+            rows, cols = 2, 2
+            cell_w = (LINKEDIN_SIZE[0] - gutter * (cols - 1)) // cols
+            cell_h = (LINKEDIN_SIZE[1] - gutter * (rows - 1)) // rows
+            
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            
+            large_cell = self.smart_crop(image_paths[0], cell_w, cell_h * 2 + gutter)
+            canvas.paste(large_cell, (0, 0))
+            
+            for idx, path in enumerate(image_paths[1:3]):
+                row = idx
+                col = 1
+                cell = self.smart_crop(path, cell_w, cell_h)
+                x = col * (cell_w + gutter)
+                y = row * (cell_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+        elif layout == "hero_center":
+            # Hero Center: 1 large top, up to 3 small below
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            # Hero top (full width, half height)
+            hero_h = (LINKEDIN_SIZE[1] - gutter) // 2
+            hero = self.smart_crop(image_paths[0], LINKEDIN_SIZE[0], hero_h)
+            canvas.paste(hero, (0, 0))
+            # Bottom row: up to 3 small cells
+            bottom_h = hero_h
+            small_w = (LINKEDIN_SIZE[0] - gutter * 2) // 3
+            small_h = bottom_h
+            num_small = min(n - 1, 3)
+            for idx, path in enumerate(image_paths[1:1+num_small]):
+                cell = self.smart_crop(path, small_w, small_h)
+                x = idx * (small_w + gutter)
+                y = hero_h + gutter
+                canvas.paste(cell, (x, y))
+            return canvas
+        elif layout == "panoramic":
+            # Panoramic: wide top, up to 4 small below (2x2)
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            # Top: full width, 1/3 height
+            top_h = (LINKEDIN_SIZE[1] - gutter * 2) // 3
+            top = self.smart_crop(image_paths[0], LINKEDIN_SIZE[0], top_h)
+            canvas.paste(top, (0, 0))
+            # Bottom: up to 4 small in 2x2 grid
+            bottom_h = top_h * 2
+            small_w = (LINKEDIN_SIZE[0] - gutter) // 2
+            small_h = (bottom_h - gutter) // 2
+            num_small = min(n - 1, 4)
+            for idx, path in enumerate(image_paths[1:1+num_small]):
+                row = idx // 2
+                col = idx % 2
+                cell = self.smart_crop(path, small_w, small_h)
+                x = col * (small_w + gutter)
+                y = top_h + gutter + row * (small_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+        elif layout == "magazine":
+            # Magazine: large left, up to 3 small right
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            left_w = (LINKEDIN_SIZE[0] - gutter) // 2
+            right_w = left_w
+            left_h = LINKEDIN_SIZE[1]
+            right_cell_h = (LINKEDIN_SIZE[1] - gutter * 2) // 3
+            left = self.smart_crop(image_paths[0], left_w, left_h)
+            canvas.paste(left, (0, 0))
+            num_small = min(n - 1, 3)
+            for idx, path in enumerate(image_paths[1:1+num_small]):
+                cell = self.smart_crop(path, right_w, right_cell_h)
+                x = left_w + gutter
+                y = idx * (right_cell_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+        elif layout == "bauhaus":
+            # Bauhaus: asymmetric geometric
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            half_w = (LINKEDIN_SIZE[0] - gutter) // 2
+            half_h = (LINKEDIN_SIZE[1] - gutter) // 2
+            # Top left square
+            cell0 = self.smart_crop(image_paths[0], half_w, half_h)
+            canvas.paste(cell0, (0, 0))
+            # Top right tall
+            if n >= 2:
+                cell1 = self.smart_crop(image_paths[1], half_w, LINKEDIN_SIZE[1])
+                canvas.paste(cell1, (half_w + gutter, 0))
+            # Bottom left square
+            if n >= 3:
+                cell2 = self.smart_crop(image_paths[2], half_w, half_h)
+                canvas.paste(cell2, (0, half_h + gutter))
+            return canvas
+        elif layout == "minimal":
+            # Minimal: clean 2x3 grid
+            rows, cols = 2, 3
+            cell_w = (LINKEDIN_SIZE[0] - gutter * (cols - 1)) // cols
+            cell_h = (LINKEDIN_SIZE[1] - gutter * (rows - 1)) // rows
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
+            for idx, path in enumerate(image_paths[:6]):
+                row = idx // cols
+                col = idx % cols
+                cell = self.smart_crop(path, cell_w, cell_h)
+                x = col * (cell_w + gutter)
+                y = row * (cell_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+        else:
+            # Default grid layout
+            rows, cols = _GRID_LAYOUTS[n]
+            cell_w = (LINKEDIN_SIZE[0] - gutter * (cols - 1)) // cols
+            cell_h = (LINKEDIN_SIZE[1] - gutter * (rows - 1)) // rows
 
-        for idx, path in enumerate(image_paths[:n]):
-            row = idx // cols
-            col = idx % cols
-            cell = self.smart_crop(path, cell_w, cell_h)
-            x = col * (cell_w + gutter)
-            y = row * (cell_h + gutter)
-            canvas.paste(cell, (x, y))
+            canvas = Image.new("RGB", LINKEDIN_SIZE, color=(255, 255, 255))
 
-        return canvas
+            for idx, path in enumerate(image_paths[:n]):
+                row = idx // cols
+                col = idx % cols
+                cell = self.smart_crop(path, cell_w, cell_h)
+                x = col * (cell_w + gutter)
+                y = row * (cell_h + gutter)
+                canvas.paste(cell, (x, y))
+            return canvas
+
+    def create_instagram_stories(
+        self,
+        image_paths: List[str],
+        captions: Optional[List[str]] = None,
+        watermark_path: Optional[str] = None,
+        layout: str = "single"
+    ) -> List[Image.Image]:
+        """Convert up to 4 images into sequential story frames with optional captions and layouts."""
+        captions = captions or []
+        
+        # Handle different story layouts
+        if layout == "single":
+            return [
+                self.create_story_frame(
+                    p,
+                    caption_text=captions[i] if i < len(captions) else "",
+                    watermark_path=watermark_path,
+                )
+                for i, p in enumerate(image_paths[:4])
+            ]
+        elif layout == "split_v" and len(image_paths) >= 2:
+            # Split vertical: 2 images stacked vertically per frame
+            frames = []
+            for i in range(0, min(len(image_paths), 4), 2):
+                path1 = image_paths[i]
+                path2 = image_paths[i+1] if i+1 < len(image_paths) else image_paths[i]
+                
+                img1 = self.smart_crop(path1, STORY_SIZE[0], STORY_SIZE[1] // 2)
+                img2 = self.smart_crop(path2, STORY_SIZE[0], STORY_SIZE[1] // 2)
+                
+                frame = Image.new("RGB", STORY_SIZE, (255, 255, 255))
+                frame.paste(img1, (0, 0))
+                frame.paste(img2, (0, STORY_SIZE[1] // 2))
+                frames.append(frame)
+            return frames
+        elif layout == "grid_2x2" and len(image_paths) >= 4:
+            # 2x2 grid on one frame
+            img1 = self.smart_crop(image_paths[0], STORY_SIZE[0] // 2, STORY_SIZE[1] // 2)
+            img2 = self.smart_crop(image_paths[1], STORY_SIZE[0] // 2, STORY_SIZE[1] // 2)
+            img3 = self.smart_crop(image_paths[2], STORY_SIZE[0] // 2, STORY_SIZE[1] // 2)
+            img4 = self.smart_crop(image_paths[3], STORY_SIZE[0] // 2, STORY_SIZE[1] // 2)
+            
+            frame = Image.new("RGB", STORY_SIZE, (255, 255, 255))
+            frame.paste(img1, (0, 0))
+            frame.paste(img2, (STORY_SIZE[0] // 2, 0))
+            frame.paste(img3, (0, STORY_SIZE[1] // 2))
+            frame.paste(img4, (STORY_SIZE[0] // 2, STORY_SIZE[1] // 2))
+            return [frame]
+        else:
+            # Default to single
+            return [
+                self.create_story_frame(
+                    p,
+                    caption_text=captions[i] if i < len(captions) else "",
+                    watermark_path=watermark_path,
+                )
+                for i, p in enumerate(image_paths[:4])
+            ]
+
+    def create_reel(
+        self,
+        video_path: str,
+        highlight_clips: List[Dict],
+        output_path: str,
+        transition: str = "crossfade",
+        layout: str = "standard"
+    ) -> bool:
+        """
+        Assemble highlight clips into a 9:16 vertical reel using ffmpeg.
+        Layout options: standard, slideshow, kinetic
+        Returns True on success, False if ffmpeg is unavailable or fails.
+        """
+        # Layout doesn't change reel assembly much right now, but we can expand later
+        if not highlight_clips:
+            return False
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            concat_path = f.name
+            for clip in highlight_clips:
+                f.write(f"file '{Path(video_path).resolve()}'\n")
+                f.write(f"inpoint {clip['start']:.3f}\n")
+                f.write(f"outpoint {clip['end']:.3f}\n")
+
+        try:
+            if transition == "crossfade" and len(highlight_clips) > 1:
+                return self._create_reel_xfade(video_path, highlight_clips, output_path)
+            else:
+                return self._create_reel_concat(concat_path, output_path)
+        except Exception:
+            # Fall back to simple concat
+            try:
+                return self._create_reel_concat(concat_path, output_path)
+            except Exception:
+                return False
+        finally:
+            Path(concat_path).unlink(missing_ok=True)
 
     # ── Instagram carousel ────────────────────────────────────────────────────
 
@@ -281,63 +505,11 @@ class LayoutAssembler:
         except Exception:
             return frame  # Watermark failure is non-fatal
 
-    def create_instagram_stories(
-        self,
-        image_paths: List[str],
-        captions: Optional[List[str]] = None,
-        watermark_path: Optional[str] = None,
-    ) -> List[Image.Image]:
-        """Convert up to 4 images into sequential story frames with optional captions."""
-        captions = captions or []
-        return [
-            self.create_story_frame(
-                p,
-                caption_text=captions[i] if i < len(captions) else "",
-                watermark_path=watermark_path,
-            )
-            for i, p in enumerate(image_paths[:4])
-        ]
+
 
     # ── Instagram reel ────────────────────────────────────────────────────────
 
-    def create_reel(
-        self,
-        video_path: str,
-        highlight_clips: List[Dict],
-        output_path: str,
-        transition: str = "crossfade",   # Item 14: 'crossfade' | 'cut'
-    ) -> bool:
-        """
-        Assemble highlight clips into a 9:16 vertical reel using ffmpeg.
 
-        Item 14: crossfade transitions between clips using xfade filter.
-        Falls back to hard cuts if xfade fails (older ffmpeg versions).
-
-        Returns True on success, False if ffmpeg is unavailable or fails.
-        """
-        if not highlight_clips:
-            return False
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            concat_path = f.name
-            for clip in highlight_clips:
-                f.write(f"file '{Path(video_path).resolve()}'\n")
-                f.write(f"inpoint {clip['start']:.3f}\n")
-                f.write(f"outpoint {clip['end']:.3f}\n")
-
-        try:
-            if transition == "crossfade" and len(highlight_clips) > 1:
-                return self._create_reel_xfade(video_path, highlight_clips, output_path)
-            else:
-                return self._create_reel_concat(concat_path, output_path)
-        except Exception:
-            # Fall back to simple concat
-            try:
-                return self._create_reel_concat(concat_path, output_path)
-            except Exception:
-                return False
-        finally:
-            Path(concat_path).unlink(missing_ok=True)
 
     def _create_reel_concat(self, concat_path: str, output_path: str) -> bool:
         """Simple concat without transitions."""

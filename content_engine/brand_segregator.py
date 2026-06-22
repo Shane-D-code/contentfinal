@@ -98,6 +98,8 @@ class BrandSegregator:
 
     def _init_clip(self):
         """Initialize CLIP model."""
+        global _CLIP_AVAILABLE
+
         if not _CLIP_AVAILABLE:
             _log.warning("clip_not_available_brand_segregation_disabled")
             return
